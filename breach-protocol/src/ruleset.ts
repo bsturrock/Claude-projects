@@ -142,7 +142,7 @@ ${
 ROUND STRUCTURE
 1. Briefing: open discussion. Anyone may speak, accuse, defend, or stay quiet.
 2. Nomination: the Captain (rotates around the table each round) nominates one other living player as Second. ${term}
-3. Debate on the nomination, then everyone alive votes YES or NO simultaneously. Votes are revealed. Strict majority YES approves the team.
+3. Debate on the nomination (anyone named in a message gets one extra reply even after using their messages, and the Captain gets a final word right before the vote), then everyone alive votes YES or NO simultaneously. Votes are revealed. Strict majority YES approves the team.
    - If rejected: Unrest rises by 1. At ${rs.unrestLimit} Unrest, the top card of the deck is logged automatically (no powers trigger), Unrest resets, and nomination restrictions clear.
 ${mission}${rs.missionMode === "split" ? "" : "\n   Everyone sees how many Breach cards were played (0, 1 or 2)."}
 5. Debrief: Captain and Second each make a public statement (they may lie).

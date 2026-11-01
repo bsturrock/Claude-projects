@@ -242,10 +242,20 @@ export class Game {
 
   // ---------- discussion ----------
   /** Open table talk. Players who speak get re-queued; anyone named in a message jumps the queue. */
-  private async discussion(label: string, maxPerPlayer: number, maxMessages: number, instruction: string) {
+  private async discussion(
+    label: string,
+    maxPerPlayer: number,
+    maxMessages: number,
+    instruction: string,
+    finalWord?: number,
+  ) {
     this.phase = label;
     this.snapshot();
     const spoken = new Map<number, number>();
+    // Anyone named in a message may answer once more even after using their messages, so a
+    // player who is questioned is never silenced by the message cap.
+    const replyUsed = new Set<number>();
+    const canSpeak = (id: number) => (spoken.get(id) ?? 0) < maxPerPlayer;
     let queue = shuffle(this.alive().map((p) => p.id));
     if (this.current.captain !== undefined) {
       queue = [this.current.captain, ...queue.filter((i) => i !== this.current.captain)];
@@ -254,7 +264,13 @@ export class Game {
     while (queue.length && total < maxMessages) {
       const pid = queue.shift()!;
       if (!this.players[pid].alive) continue;
-      const d = await this.ask(pid, "discuss", instruction);
+      const isReply = !canSpeak(pid);
+      const d = await this.ask(
+        pid,
+        "discuss",
+        isReply ? `${instruction} You were just addressed directly: this is your one chance to reply.` : instruction,
+      );
+      if (isReply) replyUsed.add(pid);
       if (!d.say.trim()) {
         this.emit("pass", null, { player: pid });
         continue;
@@ -266,10 +282,22 @@ export class Game {
       const named = this.alive()
         .filter((p) => p.id !== pid && (p.name === d.target || new RegExp(`\\b${p.name}\\b`).test(d.say)))
         .map((p) => p.id)
-        .filter((id) => (spoken.get(id) ?? 0) < maxPerPlayer);
+        .filter((id) => canSpeak(id) || !replyUsed.has(id));
       queue = [...named, ...queue.filter((id) => !named.includes(id))];
-      if (n < maxPerPlayer && !queue.includes(pid)) queue.push(pid);
+      if (canSpeak(pid) && !queue.includes(pid)) queue.push(pid);
       await this.pace();
+    }
+    // The Captain always gets the last word before the vote.
+    if (finalWord !== undefined && this.players[finalWord].alive && !this.winner) {
+      const d = await this.ask(
+        finalWord,
+        "discuss",
+        `FINAL WORD before the vote. As Captain, answer any open questions about your nomination directly and concretely, or leave "say" empty.`,
+      );
+      if (d.say.trim()) {
+        this.say(finalWord, d.say, `${label} (final word)`);
+        await this.pace();
+      } else this.emit("pass", null, { player: finalWord });
     }
   }
 
@@ -379,6 +407,7 @@ export class Game {
       this.rs.discussion.debatePerPlayer,
       this.alive().length * this.rs.discussion.debatePerPlayer,
       `DEBATE. ${cap.name} has nominated ${second.name} as Second. Argue for or against this team before the vote, or leave "say" empty.`,
+      captain,
     );
 
     // Vote

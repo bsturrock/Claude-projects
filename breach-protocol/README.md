@@ -61,12 +61,12 @@ About "chain of thought": the API never returns a model's raw reasoning. The Age
 - Crew: log 5 Repairs, or eject the Infiltrator.
 - Saboteurs: log 5 Breaches, or get the Infiltrator approved onto a mission team once 3+ Breaches are logged.
 
-**Cards.** 12 Repair and 8 Breach in a shared deck. Nobody holds cards between missions.
+**Cards.** 10 Repair and 10 Breach in a shared deck. Nobody holds cards between missions.
 
 **Each round.**
 1. **Briefing**: open talk. Agents choose whether to speak; anyone named in a message gets to respond next.
 2. **Nomination**: the Captain (rotates) picks a Second. The last approved team is barred (with 5 or fewer alive, only the last Second).
-3. **Debate**, then a simultaneous **vote**. Strict majority approves. A rejection adds 1 Unrest; at 3 the top deck card is logged automatically, with no powers.
+3. **Debate** (anyone named in a message gets one extra reply even after using their messages, and the Captain gets a final word), then a simultaneous **vote**. Strict majority approves. A rejection adds 1 Unrest; at 3 the top deck card is logged automatically, with no powers.
 4. **Mission (Split Crate)**: the Captain privately draws 2 cards, secretly passes one to the Second and discards the other face down. The Second draws 1 more card, then plays one of the 2 cards they hold; the other is discarded face down. The played card is logged.
 5. **Debrief**: the Captain claims what was in the crate and what they passed; the Second claims what they were passed and what they drew. Both may lie, and their claims can contradict.
 6. **Powers** for that Captain: 2nd Breach = Scan (privately learn a player's team), 3rd and 4th Breach = Eject, 3rd Repair = Scan.

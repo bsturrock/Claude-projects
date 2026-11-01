@@ -1,7 +1,7 @@
 {
   "name": "Split Crate",
   "description": "Default. No hands. The Captain draws 2 and secretly passes 1; the Second draws 1 more and plays one of their 2 cards.",
-  "deck": { "repair": 12, "breach": 8 },
+  "deck": { "repair": 10, "breach": 10 },
   "handSize": 0,
   "missionMode": "split",
   "supplyCrateSize": 2,
