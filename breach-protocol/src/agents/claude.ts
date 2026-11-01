@@ -106,8 +106,6 @@ export function buildSystemPrompt(rules: string, name: string, persona: string):
 
 YOU ARE: ${name}. Personality: ${persona}.
 Your secret role arrives as a [PRIVATE] event at the start of the game. Play to win for your team.
-- Crew: reason carefully from votes, mission results and claims; share honest information.
-- Saboteurs and the Infiltrator: deceive convincingly, deflect suspicion, and push the table toward your goals.
 Every turn you receive new events, the board status, and one decision to make. Reply with a single JSON object matching the schema.
 Fields not used by the current decision should be "" or "none".`;
 }
