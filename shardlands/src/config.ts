@@ -155,7 +155,7 @@ export const STANDARD: Ruleset = {
     horsemanship: { name: "Horsemanship", tier: 1, cost: { crystal: 3, food: 6 }, text: "Unlocks Riders." },
     cartography: { name: "Cartography", tier: 1, cost: { crystal: 3, wood: 5 }, text: "All units +1 sight; scouts +1 move." },
     masonry: { name: "Masonry", tier: 2, cost: { crystal: 7, ore: 10 }, requiresAny: ["mining", "forestry"], text: "Unlocks cities and Monuments. Walls cost half." },
-    currency: { name: "Currency", tier: 2, cost: { crystal: 7, wood: 6, food: 6 }, requiresAny: ["irrigation", "forestry"], text: "Bank exchange rate becomes 2:1 for your team." },
+    currency: { name: "Currency", tier: 2, cost: { crystal: 7, wood: 6, food: 6 }, requiresAny: ["irrigation", "forestry"], text: "Bank exchange rate improves from 4:1 to 3:1 for your team." },
     siegecraft: { name: "Siegecraft", tier: 2, cost: { crystal: 6, wood: 10 }, requiresAny: ["bronze"], text: "Unlocks Catapults (x3 damage against settlements)." },
     tactics: { name: "Tactics", tier: 2, cost: { crystal: 6, ore: 8, food: 6 }, requiresAny: ["bronze", "horsemanship"], text: "All military units +1 max HP; units heal 2 per turn." },
     crystal_lore: { name: "Crystal Lore", tier: 2, cost: { crystal: 6, food: 6 }, requiresAny: ["cartography", "mining"], text: "Crystal tiles yield +1 crystal; the Heart yields +2." },
