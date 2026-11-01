@@ -72,6 +72,7 @@ async function startGame(cfg: GameConfig) {
     if (String(err).includes("stopped")) return;
     push({ type: "error", to: null, text: `Game crashed: ${String(err)}` });
   } finally {
+    for (const a of agents) a.close?.();
     if (game === g) {
       const cost =
         players.reduce((a, p) => a + costOf(p.model, agents[p.id].usage), 0) +

@@ -68,7 +68,12 @@ for (const ruleset of rulesets) {
         }
       },
     });
-    const w = await game.run();
+    let w: Awaited<ReturnType<Game["run"]>>;
+    try {
+      w = await game.run();
+    } finally {
+      for (const a of agents) a.close?.();
+    }
     rounds += game.round;
     tally[`${n}p ${w}`] = (tally[`${n}p ${w}`] ?? 0) + 1;
     if (!game.winReason) throw new Error("game ended without a reason");

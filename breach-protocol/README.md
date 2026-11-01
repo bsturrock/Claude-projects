@@ -16,7 +16,7 @@ Pick player count (5-8), agents, model, ruleset, and effort, then press **New ga
 
 | Backend | How it works | Needs |
 |---|---|---|
-| **Claude Code sessions** (default) | Each player is its own persistent headless Claude Code session (`claude -p`, resumed every turn). It uses whatever account `claude` is logged in as, e.g. your Pro or Max subscription. | Claude Code installed and logged in on the machine running the server |
+| **Claude Code sessions** (default) | Each player is one long-running headless Claude Code process for the whole game (`claude -p --input-format stream-json`); each decision is a new message to it. It uses whatever account `claude` is logged in as, e.g. your Pro or Max subscription. | Claude Code installed and logged in on the machine running the server |
 | Anthropic API | Each player is a Messages API conversation. | `ANTHROPIC_API_KEY` |
 | Mock bots | Offline heuristic bots, for testing and UI demos. | Nothing |
 
@@ -24,7 +24,7 @@ Notes on the Claude Code backend:
 - The server removes `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from the child processes so they always use your login (set `BREACH_CLI_USE_API_KEY=1` to opt out).
 - Sessions run in a scratch directory (`$TMPDIR/breach-protocol-agents`) with no tools, no settings sources, no MCP servers and no slash commands, so your projects, hooks and CLAUDE.md files don't leak in.
 - Games count toward your plan's usage limits. A 5-player game is a few hundred calls; Haiku is the lightest. The board shows the API-equivalent cost Claude Code reports, which is not billed on a subscription.
-- At most 4 `claude` processes run at once (`BREACH_MAX_PARALLEL`). Each decision is a new process that resumes the session, so expect a few seconds per turn.
+- One `claude` process per player stays open for the whole game (plus a short-lived one per narrator recap), so a turn takes roughly 1-3 seconds with Haiku. If a process dies, the next turn restarts it and resumes the same session, so the player keeps its memory. Processes are closed when the game ends or is stopped. Turn timeout: `BREACH_TURN_TIMEOUT_MS` (default 300000).
 - Claude Code doesn't return thinking summaries in this mode, so the Agents tab shows each agent's stated reasoning and actions.
 
 Other commands:

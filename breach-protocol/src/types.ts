@@ -55,6 +55,8 @@ export interface Usage {
 export interface Agent {
   decide(req: DecisionRequest, newEvents: string[]): Promise<Decision>;
   usage: Usage;
+  /** Release resources (e.g. a long-running Claude Code process) when the game ends. */
+  close?(): void;
 }
 
 /** Event sent to the spectator UI. `to` = null means public; otherwise only those players saw it. */
