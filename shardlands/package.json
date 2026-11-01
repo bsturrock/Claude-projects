@@ -1,0 +1,21 @@
+{
+  "name": "shardlands",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An open-ended 3-team hex strategy game played by persistent teams of Claude agents that learn across games.",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "sim": "tsx src/sim.ts",
+    "league": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

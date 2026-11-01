@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shardlands</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>Shardlands</h1>
+  <label>League <select id="leagueSel"></select></label>
+  <label>Games <input id="nGames" type="number" min="1" max="100" value="1"></label>
+  <button id="runBtn">Play</button>
+  <button id="pauseBtn">Pause</button>
+  <button id="stopBtn">Stop</button>
+  <button id="newLeagueBtn">New league</button>
+  <span id="status" class="muted"></span>
+</header>
+
+<dialog id="newLeague">
+  <form method="dialog" id="newLeagueForm">
+    <h2>New league</h2>
+    <label>Name <input name="name" required pattern="[A-Za-z0-9_-]+" value="league1"></label>
+    <label>Teams <input name="teams" type="number" min="3" max="8" value="3"></label>
+    <label>Backend <select name="backend"><option value="claude-code">Claude Code (your login)</option><option value="api">Anthropic API</option><option value="mock">Mock bots</option></select></label>
+    <label>Model <select name="model" id="modelSel"></select></label>
+    <label>Effort <select name="effort"><option>low</option><option>medium</option><option>high</option></select></label>
+    <label>Turns <input name="turns" type="number" min="5" max="60" value="30"></label>
+    <label><input name="council" type="checkbox" checked> Council phase (talk before orders each turn)</label>
+    <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" id="createBtn">Create</button></menu>
+  </form>
+</dialog>
+
+<nav class="tabs">
+  <button data-tab="game" class="active">Game</button>
+  <button data-tab="league">League</button>
+</nav>
+
+<main id="tab-game" class="tab active">
+  <section class="mapcol">
+    <div class="toolbar">
+      <span id="gameTitle" class="muted">No game loaded</span>
+      <label>View <select id="viewAs"><option value="">Everything</option></select></label>
+      <label class="grow">Turn <input id="turnSlider" type="range" min="0" max="0" value="0"> <span id="turnLabel">-</span></label>
+      <button id="liveBtn">Live</button>
+    </div>
+    <svg id="map" viewBox="0 0 800 700" role="img" aria-label="Hex map"></svg>
+    <div id="legend" class="legend"></div>
+    <div id="hexInfo" class="muted small"></div>
+  </section>
+  <section class="sidecol">
+    <div id="scoreboard"></div>
+    <div class="subtabs">
+      <button data-sub="feed" class="active">Messages &amp; events</button>
+      <button data-sub="agents">Agents</button>
+    </div>
+    <div id="sub-feed" class="sub active">
+      <div class="filters" id="chanFilters"></div>
+      <div id="feed" class="feed"></div>
+    </div>
+    <div id="sub-agents" class="sub">
+      <div id="agentList" class="agentlist"></div>
+      <div id="agentDetail" class="feed"></div>
+    </div>
+  </section>
+</main>
+
+<main id="tab-league" class="tab">
+  <section class="leaguecol">
+    <h2 id="leagueTitle">League</h2>
+    <div id="leagueSettings" class="muted small"></div>
+    <div id="ratingsTable"></div>
+    <h3>Elo rating over games</h3>
+    <div id="eloChart" class="chart"></div>
+    <h3>Strategy divergence</h3>
+    <p class="muted small">Mean pairwise distance between teams' measured play styles, per block of 3 games. Rising means the teams' strategies are drifting apart.</p>
+    <div id="divChart" class="chart"></div>
+    <h3>Measured style (average of each team's last 5 games)</h3>
+    <div id="styleTable"></div>
+    <h3>Games</h3>
+    <div id="gamesTable"></div>
+  </section>
+  <section class="leaguecol">
+    <h3>Team</h3>
+    <div class="filters" id="teamPick"></div>
+    <div id="styleTrend" class="chart"></div>
+    <h4>Current playbook</h4>
+    <pre id="playbook" class="doc"></pre>
+    <h4>Personal memories</h4>
+    <div id="memories"></div>
+    <h4>Playbook history</h4>
+    <select id="historySel"></select>
+    <pre id="historyDoc" class="doc"></pre>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
