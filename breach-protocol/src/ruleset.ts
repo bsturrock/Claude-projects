@@ -19,8 +19,11 @@ export interface Ruleset {
    * "split":  No hands. Captain draws splitCaptainDraw cards and secretly passes one to the Second
    *           (the rest are discarded face down). The Second draws splitSecondDraw more, then plays
    *           ONE of the cards they hold; that card is logged.
+   * "paired": No hands. Captain draws splitCaptainDraw cards, keeps ONE and secretly passes ONE to the
+   *           Second (any others are discarded). The Second draws splitSecondDraw more. Both secretly play
+   *           one card; the two are revealed shuffled and resolved like a two-card mission.
    */
-  missionMode: "simultaneous" | "supply" | "split";
+  missionMode: "simultaneous" | "supply" | "split" | "paired";
   supplyCrateSize: number;
   splitCaptainDraw?: number;
   splitSecondDraw?: number;
@@ -65,14 +68,15 @@ function validate(rs: Ruleset, id: string) {
     throw new Error(`ruleset ${id}: ${m}`);
   };
   const total = rs.deck.repair + rs.deck.breach;
-  if (rs.missionMode === "split") {
+  if (rs.missionMode === "split" || rs.missionMode === "paired") {
     rs.splitCaptainDraw ??= 2;
     rs.splitSecondDraw ??= 1;
     if (rs.splitCaptainDraw < 1 || rs.splitSecondDraw < 0) fail("split draws must be >= 1 (captain) and >= 0 (second)");
-    if (rs.splitSecondDraw === 0 && rs.splitCaptainDraw < 2) fail("the Second needs at least 2 cards to choose from");
+    if (rs.missionMode === "split" && rs.splitSecondDraw === 0 && rs.splitCaptainDraw < 2) fail("the Second needs at least 2 cards to choose from");
+    if (rs.missionMode === "paired" && rs.splitCaptainDraw < 2) fail("paired mode needs splitCaptainDraw >= 2 (keep one, pass one)");
     if (total < 8 * rs.handSize + rs.splitCaptainDraw + rs.splitSecondDraw + 2) fail("deck too small for 8 players");
   } else {
-    if (rs.handSize < 1) fail("handSize must be >= 1 unless missionMode is split");
+    if (rs.handSize < 1) fail("handSize must be >= 1 unless missionMode is split or paired");
     if (total < 8 * rs.handSize + rs.supplyCrateSize + 2) fail("deck too small for 8 players");
   }
   if (rs.missionMode === "supply" && rs.supplyCrateSize < 2) fail("supplyCrateSize must be >= 2");
@@ -103,8 +107,15 @@ export function rulesText(rs: Ruleset): string {
    a. The Captain privately draws ${rs.splitCaptainDraw} card(s) (the "crate"), secretly passes ONE to the Second, and discards the rest face down. Only the Captain knows the crate.
    b. The Second privately draws ${rs.splitSecondDraw} more card(s), then secretly plays ONE of the ${(rs.splitSecondDraw ?? 0) + 1} cards they hold; the rest are discarded face down. Only the Second knows what they were passed and drew.
    c. The played card is revealed and logged (Repair or Breach). Everyone knows the Second chose it, but not what the Second had to choose from or what the Captain passed.`;
+  const paired = `4. Mission (Paired Play). Nobody holds cards between missions.
+   a. The Captain privately draws ${rs.splitCaptainDraw} cards, KEEPS one and secretly passes ONE to the Second${(rs.splitCaptainDraw ?? 2) > 2 ? " (the rest are discarded face down)" : ""}. Only the Captain knows what was drawn.
+   b. The Second privately draws ${rs.splitSecondDraw} more card(s), so they hold ${(rs.splitSecondDraw ?? 1) + 1}.
+   c. The Captain plays the card they kept; the Second secretly plays ONE of their cards (the rest are discarded face down).
+   d. The two played cards are revealed shuffled, so nobody sees who played which. ${resolution}`;
   const mission =
-    rs.missionMode === "split"
+    rs.missionMode === "paired"
+      ? paired
+      : rs.missionMode === "split"
       ? split
       : rs.missionMode === "supply"
       ? `4. Mission (Supply Crate):
@@ -130,7 +141,7 @@ TEAMS
 - The Infiltrator is on the Saboteur team. Regular Saboteurs know each other and know who the Infiltrator is. The Infiltrator does NOT know who the Saboteurs are.
 
 ${
-    rs.missionMode === "split"
+    rs.missionMode === "split" || rs.missionMode === "paired"
       ? `CARDS
 - Shared deck: ${rs.deck.repair} Repair and ${rs.deck.breach} Breach cards. Players do not hold hands. Used and discarded cards go to a discard pile, which is reshuffled into the deck when it runs out.
 - Because draws are random, an honest Captain or Second can be left with only Breach cards. Saboteurs can also choose Repair to look innocent.`
@@ -160,10 +171,19 @@ ${strategyText(rs)}`;
 /** Strategy guidance for both teams, tailored to the mission mode. Every player sees all of it. */
 export function strategyText(rs: Ruleset): string {
   const split = rs.missionMode === "split";
-  const crewMission = split
+  const paired = rs.missionMode === "paired";
+  const crewMission = paired
+    ? `- A Breach means the Captain kept a Breach, or the Second played one, or both. Compare their claims: the Captain's draw, the card passed, and the Second's draw must all fit the cards revealed. A Captain who claims they kept a Repair while one Breach shows is accusing their Second, and vice versa.
+- Two Breaches revealed means both played a Breach. At least one of them chose it unless every card they saw was a Breach.`
+    : split
     ? `- The Second's choice is the key fact. If the Second held a Repair and played a Breach, they are almost certainly a Saboteur. If Captain and Second tell different stories about the passed card, one of them is lying: look at who benefits and at each player's record.`
     : `- When a Breach appears, compare both team members' claims. Claims that cannot both be true mean one of them is lying.`;
-  const sabMission = split
+  const sabMission = paired
+    ? `- As Captain, if you draw a Breach you can KEEP it and guarantee a Breach is played. Then pass your partner the other card and blame the Second: "I kept the Repair and passed the Breach."
+- As Second, if you hold a Breach you can play it and blame the Captain: "I was passed a Repair and drew a Repair, so the Breach was the Captain's."
+- One Breach out of two is deniable for both of you. Two Breaches are harder to explain, so only play a Breach with a Saboteur partner if you have agreed a story through how you talk.
+- Never admit to choosing a Breach while holding a Repair. That is a confession.`
+    : split
     ? `- Never admit to choosing a Breach while holding a Repair. That is a confession.
 - As Second after playing a Breach: say you had no choice. Claim the Captain passed you a Breach and you drew a Breach. If the Captain already said they passed a Repair, contradict them anyway: it becomes their word against yours, and nobody can check either hand.
 - As Captain after a Breach: claim the crate held two Breaches so you were forced to pass one, or claim you passed a Repair so the Second must have chosen the Breach.

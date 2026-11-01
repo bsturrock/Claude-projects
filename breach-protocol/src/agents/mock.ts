@@ -53,7 +53,9 @@ export class MockAgent implements Agent {
         break;
       case "supply":
         // Saboteur Captains hand over Breach to frame the Second; Crew hand over Repair.
-        d.card = evil ? "breach" : "repair";
+        // Paired Play: you KEEP the other card, so Saboteurs pass the Repair and keep the Breach.
+        if (req.instruction.includes("KEEP")) d.card = evil ? "repair" : "breach";
+        else d.card = evil ? "breach" : "repair";
         d.private_reasoning = `Handing over ${d.card}.`;
         break;
       case "play_card":

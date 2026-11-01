@@ -63,7 +63,7 @@ async function loadConfig() {
   if (!c.hasKey) $("backend").querySelector('[value="api"]').textContent += " (no key set)";
   $("model").disabled = $("backend").value === "mock";
   $("ruleset").innerHTML = c.rulesets.map((r) => `<option value="${esc(r.id)}" title="${esc(r.description)}">${esc(r.name)}</option>`).join("");
-  if (c.rulesets.some((r) => r.id === "split-crate")) $("ruleset").value = "split-crate";
+  if (c.rulesets.some((r) => r.id === "paired-play")) $("ruleset").value = "paired-play";
   await loadLogs();
 }
 async function loadLogs() {

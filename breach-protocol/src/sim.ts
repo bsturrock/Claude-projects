@@ -60,7 +60,7 @@ for (const ruleset of rulesets) {
             throw new Error("track overflow");
           const minHand = rules.handSize;
           const maxHand =
-            rules.missionMode === "split"
+            rules.missionMode === "split" || rules.missionMode === "paired"
               ? 1 + (rules.splitSecondDraw ?? 1)
               : rules.handSize + (rules.missionMode === "supply" ? rules.supplyCrateSize - 1 : 0);
           for (const p of s.players)

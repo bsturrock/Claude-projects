@@ -122,7 +122,7 @@ createServer(async (req, res) => {
         backend: (["claude-code", "api", "mock"].includes(data.backend) ? data.backend : "claude-code") as GameConfig["backend"],
         model: String(data.model ?? "claude-opus-5-5"),
         effort: data.effort ?? "medium",
-        ruleset: String(data.ruleset ?? "split-crate"),
+        ruleset: String(data.ruleset ?? "paired-play"),
         narrator: data.narrator !== false,
       };
       void startGame(cfg);

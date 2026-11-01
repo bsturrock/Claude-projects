@@ -1,0 +1,21 @@
+{
+  "name": "Paired Play",
+  "description": "Default. No hands. The Captain draws 2, keeps 1 and passes 1; the Second draws 1 more. Both play a card, revealed shuffled; any Breach logs a Breach.",
+  "deck": { "repair": 12, "breach": 8 },
+  "handSize": 0,
+  "missionMode": "paired",
+  "supplyCrateSize": 2,
+  "splitCaptainDraw": 2,
+  "splitSecondDraw": 1,
+  "resolution": "any_breach",
+  "repairsToWin": 5,
+  "breachesToWin": 5,
+  "unrestLimit": 3,
+  "infiltratorDangerAt": 3,
+  "breachPowers": { "2": "scan", "3": "eject", "4": "eject" },
+  "repairPowers": { "3": "scan" },
+  "saboteurs": { "5": 1, "6": 1, "7": 2, "8": 2 },
+  "termLimits": "team",
+  "discussion": { "briefingPerPlayer": 2, "debatePerPlayer": 1 },
+  "maxRounds": 30
+}

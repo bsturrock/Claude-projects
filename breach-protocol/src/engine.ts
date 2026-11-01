@@ -480,13 +480,17 @@ export class Game {
       rec = `R${this.round}: ${cap.name} + ${second.name} APPROVED (${voteText}) -> ${second.name} played ${result.toUpperCase()}`;
     } else {
       if (this.rs.missionMode === "supply") await this.supplyCrate(cap, second, facts);
+      if (this.rs.missionMode === "paired") await this.pairedSetup(cap, second, facts);
+      // A player holding a single card has no choice to make, so they are not asked.
       const plays = await Promise.all(
         team.map((p) =>
-          this.ask(
-            p.id,
-            "play_card",
-            `MISSION. You are on the team. Your hand: ${p.hand.join(", ")}. Set "card" to the card you play ("repair" or "breach"); it must be in your hand. Leave "say" empty.`,
-          ),
+          p.hand.length === 1
+            ? Promise.resolve({ card: p.hand[0] } as Decision)
+            : this.ask(
+                p.id,
+                "play_card",
+                `MISSION. You are on the team. You hold: ${p.hand.join(", ")}. Set "card" to the card you play ("repair" or "breach"); it must be one you hold. Leave "say" empty.`,
+              ),
         ),
       );
       const played: Card[] = team.map((p, i) => {
@@ -516,7 +520,8 @@ export class Game {
         `Mission result: ${shown.map((c) => c.toUpperCase()).join(" + ")} -> ${result.toUpperCase()} logged (${nBreach} Breach card${nBreach === 1 ? "" : "s"}).`,
         { kind: "mission", cards: shown, result },
       );
-      for (const p of team) this.tell(p.id, `You played ${played[team.indexOf(p)]}. Your hand is now: ${p.hand.join(", ")}.`);
+      for (const p of team)
+        this.tell(p.id, `You played ${played[team.indexOf(p)]}.${this.rs.handSize > 0 ? ` Your hand is now: ${p.hand.join(", ")}.` : ""}`);
       rec = `R${this.round}: ${cap.name} + ${second.name} APPROVED (${voteText}) -> ${result.toUpperCase()} (${nBreach} Breach card${nBreach === 1 ? "" : "s"})`;
     }
     facts.result = result;
@@ -535,7 +540,11 @@ export class Game {
       const d = await this.ask(
         p.id,
         "debrief",
-        this.rs.missionMode === "split"
+        this.rs.missionMode === "paired"
+          ? p === cap
+            ? `DEBRIEF. Make your public statement as Captain: what you drew, which card you kept and played, and which you passed to ${second.name}. You may lie.`
+            : `DEBRIEF. Make your public statement as Second: what ${cap.name} passed you, what you drew, and what you played. You may lie.`
+          : this.rs.missionMode === "split"
           ? p === cap
             ? `DEBRIEF. Make your public statement as Captain: what was in the crate and which card you passed to ${second.name}. You may lie.`
             : `DEBRIEF. Make your public statement as Second: what ${cap.name} passed you, what you drew, and why you played what you played. You may lie.`
@@ -603,6 +612,35 @@ export class Game {
       result: card,
     });
     return card;
+  }
+
+  /** Paired Play: Captain keeps one drawn card and passes one; the Second adds their own draw. */
+  private async pairedSetup(cap: Player, second: Player, facts: RoundFacts) {
+    const drawn = Array.from({ length: this.rs.splitCaptainDraw ?? 2 }, () => this.draw());
+    facts.crate = [...drawn];
+    this.announce(`${cap.name} draws ${drawn.length} cards.`, { kind: "crate" });
+    this.tell(cap.id, `You drew: ${drawn.join(", ")}.`);
+    let pass: Card = drawn[0];
+    if (new Set(drawn).size > 1) {
+      const d = await this.ask(
+        cap.id,
+        "supply",
+        `PAIRED PLAY. You drew: ${drawn.join(", ")}. Choose ONE card to PASS secretly to ${second.name} by setting "card". You KEEP and will play the other${drawn.length > 2 ? " (extras are discarded)" : ""}. Leave "say" empty.`,
+      );
+      if (d.card === "repair" || d.card === "breach") pass = d.card;
+    }
+    drawn.splice(drawn.indexOf(pass), 1);
+    const keep = drawn.shift()!;
+    this.discard.push(...drawn);
+    cap.hand = [keep];
+    const own = Array.from({ length: this.rs.splitSecondDraw ?? 1 }, () => this.draw());
+    facts.handed = pass;
+    facts.secondDrew = [...own];
+    second.hand = [pass, ...own];
+    this.announce(`${cap.name} keeps one card and passes one to ${second.name}, who draws ${own.length} more.`);
+    this.tell(cap.id, `You kept ${keep} (you will play it) and passed ${second.name} a ${pass}.`);
+    this.tell(second.id, `${cap.name} passed you a ${pass}.${own.length ? ` You drew: ${own.join(", ")}.` : ""} You now hold: ${second.hand.join(", ")}.`);
+    this.snapshot();
   }
 
   /** Captain draws the crate and secretly hands one card to the Second. */
