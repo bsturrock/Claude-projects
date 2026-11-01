@@ -152,5 +152,33 @@ ${powersText(rs)}
 TALK
 - All conversation is public. You may lie, bluff, or claim anything. Ejected players cannot speak or vote.
 - Refer to players by name. Keep each message under 70 words. Stay in character as a station crew member; this is a game of deduction and persuasion.
-- Good play: track every claim (crate contents, cards passed, received and drawn, scan results) and look for claims that cannot all be true. Compare them with the public mission and vote record you are given each turn.`;
+- Good play: track every claim (crate contents, cards passed, received and drawn, scan results) and look for claims that cannot all be true. Compare them with the public mission and vote record you are given each turn.
+
+${strategyText(rs)}`;
+}
+
+/** Strategy guidance for both teams, tailored to the mission mode. Every player sees all of it. */
+export function strategyText(rs: Ruleset): string {
+  const split = rs.missionMode === "split";
+  const crewMission = split
+    ? `- The Second's choice is the key fact. If the Second held a Repair and played a Breach, they are almost certainly a Saboteur. If Captain and Second tell different stories about the passed card, one of them is lying: look at who benefits and at each player's record.`
+    : `- When a Breach appears, compare both team members' claims. Claims that cannot both be true mean one of them is lying.`;
+  const sabMission = split
+    ? `- Never admit to choosing a Breach while holding a Repair. That is a confession.
+- As Second after playing a Breach: say you had no choice. Claim the Captain passed you a Breach and you drew a Breach. If the Captain already said they passed a Repair, contradict them anyway: it becomes their word against yours, and nobody can check either hand.
+- As Captain after a Breach: claim the crate held two Breaches so you were forced to pass one, or claim you passed a Repair so the Second must have chosen the Breach.
+- As Captain you can also pass a Breach to an honest Second. If they also draw a Breach they are forced to play it and will take the blame.`
+    : `- Never admit to playing a Breach by choice. Claim your hand forced it, or cast doubt on your partner.`;
+  return `STRATEGY
+For the Crew:
+${crewMission}
+- Votes are public. Notice who keeps approving teams that produce Breaches, and who protects whom.
+- Share scan results, but remember a scanning Captain may be lying.
+
+For the Saboteurs and the Infiltrator:
+${sabMission}
+- Before every claim, check it against everything public: the card(s) revealed, how many cards each person drew, and what you claimed in earlier rounds. Keep your story consistent across the whole game.
+- Pick your moments. Playing Repair early builds trust you can spend later; a Breach is worth most when it pushes toward ${rs.breachesToWin} Breaches${rs.infiltratorDangerAt > 0 ? ` or toward the ${rs.infiltratorDangerAt}-Breach Infiltrator threshold` : ""}.
+- A false scan result can split the table, but only accuse someone the table can believe is guilty.
+- Regular Saboteurs: protect the Infiltrator quietly. Don't vote as an obvious bloc or defend each other every time.`;
 }
