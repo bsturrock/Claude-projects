@@ -1,0 +1,19 @@
+{
+  "name": "Simultaneous Play",
+  "description": "The original variant. Captain and Second each play a card from their own hand and refill. No crate.",
+  "deck": { "repair": 12, "breach": 8 },
+  "handSize": 2,
+  "missionMode": "simultaneous",
+  "supplyCrateSize": 2,
+  "resolution": "any_breach",
+  "repairsToWin": 5,
+  "breachesToWin": 5,
+  "unrestLimit": 3,
+  "infiltratorDangerAt": 3,
+  "breachPowers": { "2": "scan", "3": "eject", "4": "eject" },
+  "repairPowers": { "3": "scan" },
+  "saboteurs": { "5": 1, "6": 1, "7": 2, "8": 2 },
+  "termLimits": "team",
+  "discussion": { "briefingPerPlayer": 2, "debatePerPlayer": 1 },
+  "maxRounds": 30
+}

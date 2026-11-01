@@ -27,6 +27,9 @@
           <option value="mock">Mock bots (no API)</option>
         </select>
       </label>
+      <label>Rules
+        <select id="ruleset"></select>
+      </label>
       <label>Effort
         <select id="effort">
           <option>low</option><option selected>medium</option><option>high</option>
@@ -35,8 +38,20 @@
       <button type="submit" id="start">New game</button>
       <button type="button" id="pause">Pause</button>
       <button type="button" id="stop">Stop</button>
+      <label class="toggle"><input type="checkbox" id="narrator" checked /> Narrator</label>
       <label class="toggle"><input type="checkbox" id="reveal" /> Reveal roles &amp; thoughts</label>
     </form>
+    <div class="replay-bar">
+      <label>Saved games
+        <select id="logs"><option value="">(none)</option></select>
+      </label>
+      <select id="replaySpeed" title="Replay speed">
+        <option value="0">Instant</option><option value="4" selected>Fast</option><option value="1">Normal</option>
+      </select>
+      <button type="button" id="replay">Replay</button>
+      <button type="button" id="live">Back to live</button>
+      <span id="mode" class="mode">LIVE</span>
+    </div>
   </header>
 
   <main>
@@ -78,10 +93,22 @@
 
     <section class="feed-wrap">
       <div class="feed-head">
-        <h2>Table talk</h2>
+        <nav class="tabs" id="tabs">
+          <button type="button" data-tab="feed" class="active">Table talk</button>
+          <button type="button" data-tab="rounds">Rounds</button>
+          <button type="button" data-tab="agents">Agents</button>
+          <button type="button" data-tab="summary">Game</button>
+        </nav>
         <label class="toggle small"><input type="checkbox" id="autoscroll" checked /> Auto-scroll</label>
       </div>
-      <div class="feed" id="feed"></div>
+      <div class="feed tab-pane" id="feed"></div>
+      <div class="feed tab-pane hidden" id="rounds"><p class="empty">Round recaps appear here as each round ends.</p></div>
+      <div class="tab-pane hidden agents-pane" id="agents">
+        <div class="agent-picker" id="agentPicker"></div>
+        <div class="needs-reveal">Turn on "Reveal roles &amp; thoughts" to see inside the agents' heads.</div>
+        <div class="feed timeline spoiler-block" id="timeline"></div>
+      </div>
+      <div class="feed tab-pane hidden" id="summary"><p class="empty">The game summary appears here when the game ends.</p></div>
     </section>
   </main>
 

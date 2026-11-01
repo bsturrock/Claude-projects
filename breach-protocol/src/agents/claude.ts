@@ -62,6 +62,8 @@ export class ClaudeAgent implements Agent {
       system: this.system,
       messages: this.messages,
       cache_control: { type: "ephemeral" },
+      // "summarized" returns a readable summary of the model's reasoning for the spectator UI.
+      thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: this.effort, format: { type: "json_schema", schema: DECISION_SCHEMA } },
       ...(useFallback ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
     });
@@ -82,14 +84,19 @@ export class ClaudeAgent implements Agent {
     // Append the full content (thinking blocks included) unchanged: history stays append-only.
     this.messages.push({ role: "assistant", content: response.content as Anthropic.Beta.BetaContentBlockParam[] });
 
+    const thinking = response.content
+      .filter((b): b is Anthropic.Beta.BetaThinkingBlock => b.type === "thinking")
+      .map((b) => b.thinking)
+      .join("\n")
+      .trim();
     const out = response.content
       .filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text")
       .map((b) => b.text)
       .join("");
     try {
-      return { ...EMPTY, ...(JSON.parse(out) as Decision) };
+      return { ...EMPTY, ...(JSON.parse(out) as Decision), thinking };
     } catch {
-      return { ...EMPTY, private_reasoning: "(unparseable response)" };
+      return { ...EMPTY, private_reasoning: "(unparseable response)", thinking };
     }
   }
 }

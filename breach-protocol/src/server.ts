@@ -1,10 +1,11 @@
 import { createServer, type ServerResponse } from "node:http";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Game } from "./engine.js";
 import { MockAgent } from "./agents/mock.js";
-import { MODELS, costOf, createPlayers, type GameConfig } from "./setup.js";
+import { listRulesets } from "./ruleset.js";
+import { MODELS, costOf, createGameParts, type GameConfig } from "./setup.js";
 import type { UiEvent, Usage } from "./types.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -23,8 +24,14 @@ let resumeWaiters: (() => void)[] = [];
 function push(e: Omit<UiEvent, "seq" | "t">) {
   const ev = { ...e, seq: seq++, t: Date.now() } as UiEvent;
   if (ev.type === "state") {
-    const st = ev.state as { players: { model: string; usage: Usage }[]; usd?: number };
-    st.usd = st.players.reduce((a, p) => a + costOf(p.model, p.usage), 0);
+    const st = ev.state as {
+      players: { model: string; usage: Usage }[];
+      narrator: { model: string; usage: Usage } | null;
+      usd?: number;
+    };
+    st.usd =
+      st.players.reduce((a, p) => a + costOf(p.model, p.usage), 0) +
+      (st.narrator ? costOf(st.narrator.model, st.narrator.usage) : 0);
   }
   events.push(ev);
   const line = `data: ${JSON.stringify(ev)}\n\n`;
@@ -45,9 +52,16 @@ async function startGame(cfg: GameConfig) {
   stopped = false;
   events = [];
   push({ type: "reset", to: null, config: cfg });
-  const { players, agents } = createPlayers(cfg);
+  let parts: ReturnType<typeof createGameParts>;
+  try {
+    parts = createGameParts(cfg);
+  } catch (err) {
+    push({ type: "error", to: null, text: `Could not start: ${String(err)}` });
+    return;
+  }
+  const { rules, players, agents, narrator } = parts;
   MockAgent.delayMs = cfg.model === "mock" ? 250 : 0;
-  const g = new Game({ players, agents, emit: push, gate, paceMs: cfg.model === "mock" ? 500 : 0 });
+  const g = new Game({ rules, players, agents, narrator, emit: push, gate, paceMs: cfg.model === "mock" ? 500 : 0 });
   game = g;
   push({ type: "players", to: null, players: players.map((p) => ({ id: p.id, name: p.name, model: p.model, persona: p.persona })) });
   try {
@@ -57,11 +71,16 @@ async function startGame(cfg: GameConfig) {
     push({ type: "error", to: null, text: `Game crashed: ${String(err)}` });
   } finally {
     if (game === g) {
-      const cost = players.reduce((a, p) => a + costOf(p.model, agents[p.id].usage), 0);
+      const cost =
+        players.reduce((a, p) => a + costOf(p.model, agents[p.id].usage), 0) +
+        (narrator ? costOf(narrator.model, narrator.usage) : 0);
       push({ type: "cost", to: null, usd: cost });
       mkdirSync(logsDir, { recursive: true });
       const file = path.join(logsDir, `game-${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
-      writeFileSync(file, JSON.stringify({ config: cfg, winner: g.winner, reason: g.winReason, events }, null, 2));
+      writeFileSync(
+        file,
+        JSON.stringify({ config: cfg, ruleset: rules, winner: g.winner, reason: g.winReason, summary: g.gameSummary, usd: cost, events }),
+      );
     }
   }
 }
@@ -71,7 +90,7 @@ function json(res: ServerResponse, code: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-const TYPES: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
+const TYPES: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 
 createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -85,6 +104,7 @@ createServer(async (req, res) => {
   if (url.pathname === "/api/config") {
     return json(res, 200, {
       models: MODELS,
+      rulesets: listRulesets(),
       hasKey: Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
     });
   }
@@ -97,6 +117,8 @@ createServer(async (req, res) => {
         numPlayers: Number(data.numPlayers ?? 7),
         model: String(data.model ?? "claude-opus-5-5"),
         effort: data.effort ?? "medium",
+        ruleset: String(data.ruleset ?? "supply-crate"),
+        narrator: data.narrator !== false,
       };
       void startGame(cfg);
       return json(res, 200, { ok: true });
@@ -120,9 +142,26 @@ createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
   }
-  const file = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-  const full = path.join(publicDir, path.normalize(file));
-  if (!full.startsWith(publicDir)) return json(res, 403, { error: "forbidden" });
+  if (url.pathname === "/api/logs") {
+    let files: string[] = [];
+    try {
+      files = readdirSync(logsDir).filter((f) => f.endsWith(".json")).sort().reverse();
+    } catch {}
+    const list = files.slice(0, 50).map((f) => {
+      try {
+        const d = JSON.parse(readFileSync(path.join(logsDir, f), "utf8"));
+        return { file: f, winner: d.winner, model: d.config?.model, players: d.config?.numPlayers, ruleset: d.ruleset?.name };
+      } catch {
+        return { file: f };
+      }
+    });
+    return json(res, 200, list);
+  }
+  const isLog = url.pathname.startsWith("/logs/");
+  const baseDir = isLog ? logsDir : publicDir;
+  const file = isLog ? url.pathname.slice("/logs/".length) : url.pathname === "/" ? "index.html" : url.pathname.slice(1);
+  const full = path.join(baseDir, path.normalize(file));
+  if (!full.startsWith(baseDir + path.sep)) return json(res, 403, { error: "forbidden" });
   let buf: Buffer;
   try {
     buf = readFileSync(full);

@@ -15,6 +15,7 @@ export type DecisionKind =
   | "discuss"
   | "nominate"
   | "vote"
+  | "supply"
   | "play_card"
   | "debrief"
   | "scan"
@@ -37,6 +38,8 @@ export interface Decision {
   target: string;
   vote: "yes" | "no" | "none";
   card: Card | "none";
+  /** Summarized extended-thinking text, when the model returns it (not part of the JSON schema). */
+  thinking?: string;
 }
 
 export interface Usage {
@@ -59,4 +62,26 @@ export interface UiEvent {
   type: string;
   to: number[] | null;
   [k: string]: unknown;
+}
+
+export interface RoundSummary {
+  public_recap: string;
+  spectator_analysis: string;
+}
+
+export interface GameSummary {
+  headline: string;
+  story: string;
+  turning_points: string[];
+  best_play: string;
+  biggest_mistake: string;
+  players: { name: string; verdict: string }[];
+}
+
+/** Writes recaps from the full (spectator) log. Never talks to the players. */
+export interface Narrator {
+  usage: Usage;
+  model: string;
+  round(log: string): Promise<RoundSummary>;
+  game(log: string): Promise<GameSummary>;
 }

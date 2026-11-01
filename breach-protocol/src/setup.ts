@@ -2,12 +2,14 @@ import Anthropic from "@anthropic-ai/sdk";
 import { ClaudeAgent, buildSystemPrompt, type Effort } from "./agents/claude.js";
 import { MockAgent } from "./agents/mock.js";
 import { shuffle } from "./engine.js";
-import { NAMES, PERSONAS, RULES_TEXT, rolesFor } from "./rules.js";
-import type { Agent, Player, Usage } from "./types.js";
+import { ClaudeNarrator, MockNarrator } from "./narrator.js";
+import { NAMES, PERSONAS } from "./rules.js";
+import { loadRuleset, rolesFor, rulesText, type Ruleset } from "./ruleset.js";
+import type { Agent, Narrator, Player, Usage } from "./types.js";
 
 export const MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] as const;
 
-/** USD per million tokens: [input, cache write (5m), cache read, output]. Prompts <100K for Haiku. */
+/** USD per million tokens: [input, cache write (5m), cache read, output]. Haiku: prompts under 100K. */
 const PRICES: Record<string, [number, number, number, number]> = {
   "claude-opus-5-5": [4, 5, 0.2, 20],
   "claude-sonnet-5-5": [2, 2.5, 0.2, 10],
@@ -25,11 +27,17 @@ export interface GameConfig {
   /** One model for everyone, "mixed" (rotate through MODELS), or "mock". */
   model: string;
   effort: Effort;
+  /** File name (without .json) in /rulesets. */
+  ruleset: string;
+  /** Write round and game recaps with a narrator agent. */
+  narrator: boolean;
 }
 
-export function createPlayers(cfg: GameConfig): { players: Player[]; agents: Agent[] } {
+export function createGameParts(cfg: GameConfig): { rules: Ruleset; players: Player[]; agents: Agent[]; narrator?: Narrator } {
+  const rules = loadRuleset(cfg.ruleset);
+  const text = rulesText(rules);
   const n = Math.max(5, Math.min(8, cfg.numPlayers));
-  const roles = shuffle(rolesFor(n));
+  const roles = shuffle(rolesFor(rules, n));
   const personas = shuffle(PERSONAS);
   const players: Player[] = roles.map((role, id) => ({
     id,
@@ -42,9 +50,11 @@ export function createPlayers(cfg: GameConfig): { players: Player[]; agents: Age
   }));
   const client = cfg.model === "mock" ? null : new Anthropic({ maxRetries: 4 });
   const agents: Agent[] = players.map((p) =>
-    client
-      ? new ClaudeAgent(client, p.model, buildSystemPrompt(RULES_TEXT, p.name, p.persona), cfg.effort)
-      : new MockAgent(p, players),
+    client ? new ClaudeAgent(client, p.model, buildSystemPrompt(text, p.name, p.persona), cfg.effort) : new MockAgent(p, players),
   );
-  return { players, agents };
+  let narrator: Narrator | undefined;
+  if (cfg.narrator) {
+    narrator = client ? new ClaudeNarrator(client, cfg.model === "mixed" ? MODELS[0] : cfg.model, text) : new MockNarrator();
+  }
+  return { rules, players, agents, narrator };
 }

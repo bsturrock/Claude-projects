@@ -51,6 +51,11 @@ export class MockAgent implements Agent {
       case "vote":
         d.vote = Math.random() < (evil ? 0.6 : 0.65) ? "yes" : "no";
         break;
+      case "supply":
+        // Saboteur Captains hand over Breach to frame the Second; Crew hand over Repair.
+        d.card = evil ? "breach" : "repair";
+        d.private_reasoning = `Handing over ${d.card}.`;
+        break;
       case "play_card":
         d.card = evil && this.self.hand.includes("breach") && Math.random() < 0.8 ? "breach" : this.self.hand.includes("repair") ? "repair" : "breach";
         d.private_reasoning = `Playing ${d.card}.`;
