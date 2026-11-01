@@ -1,0 +1,20 @@
+{
+  "name": "breach-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A hidden-role social deduction game played by Claude agents, with a live spectator UI.",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "sim": "tsx src/sim.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
