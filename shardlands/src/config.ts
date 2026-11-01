@@ -44,6 +44,10 @@ export interface TechSpec {
 
 export interface Ruleset {
   name: string;
+  /** Agents per team. A match is always two teams. */
+  agentsPerTeam: number;
+  /** No combat is possible on turns 1..truceTurns (the opening expansion window). */
+  truceTurns: number;
   turns: number;
   vpTarget: number;
   mapRadius: number;
@@ -80,11 +84,7 @@ export interface Ruleset {
     capture: number;
     techTier: Record<1 | 2 | 3, number>;
     heartPerTurn: number;
-    tradePerTurn: number;
-    tradeCap: number;
-    tradeMinValue: number;
   };
-  offerTtl: number;
   maxOrdersPerTurn: number;
   maxStack: number;
   techs: Record<string, TechSpec>;
@@ -92,8 +92,10 @@ export interface Ruleset {
 
 export const STANDARD: Ruleset = {
   name: "standard",
+  agentsPerTeam: 4,
+  truceTurns: 4,
   turns: 30,
-  vpTarget: 60,
+  vpTarget: 80,
   mapRadius: 7,
   terrainWeights: { plains: 30, forest: 22, hills: 17, mountain: 10, water: 9, crystal: 6, ruins: 6 },
   yields: {
@@ -118,7 +120,7 @@ export const STANDARD: Ruleset = {
   },
   settlement: {
     hp: { village: 4, town: 7, city: 10 },
-    defense: { village: 1, town: 2, city: 3 },
+    defense: { village: 2, town: 3, city: 4 },
     sight: 2,
     upgradeCost: { town: { wood: 10, ore: 6, food: 6 }, city: { wood: 16, ore: 12, food: 8, crystal: 3 } },
     cityRequires: "masonry",
@@ -140,11 +142,7 @@ export const STANDARD: Ruleset = {
     capture: 2,
     techTier: { 1: 1, 2: 2, 3: 3 },
     heartPerTurn: 1,
-    tradePerTurn: 1,
-    tradeCap: 8,
-    tradeMinValue: 4,
   },
-  offerTtl: 2,
   maxOrdersPerTurn: 20,
   maxStack: 6,
   techs: {
@@ -162,7 +160,7 @@ export const STANDARD: Ruleset = {
     statecraft: { name: "Statecraft", tier: 2, cost: { crystal: 7, food: 10 }, requiresAny: ["irrigation", "cartography"], text: "Settlers and town upgrades cost 2 food and 2 wood less; settlements +2 HP." },
     astral_lore: { name: "Astral Lore", tier: 3, cost: { crystal: 14, ore: 12 }, requiresAll: ["crystal_lore", "masonry"], text: "Unlocks the Shard Spire wonder (only one in the game)." },
     steel: { name: "Steel", tier: 3, cost: { crystal: 12, ore: 16 }, requiresAll: ["tactics"], text: "Soldiers and Riders +1 strength." },
-    guilds: { name: "Guilds", tier: 3, cost: { crystal: 12, wood: 12, food: 12 }, requiresAll: ["currency"], text: "Every settlement yields +1 of each resource it already produces; trade VP cap +4." },
+    guilds: { name: "Guilds", tier: 3, cost: { crystal: 12, wood: 12, food: 12 }, requiresAll: ["currency"], text: "Every settlement yields +1 of each resource it already produces." },
   },
 };
 

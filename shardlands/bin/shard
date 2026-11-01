@@ -1,0 +1,22 @@
+#!/usr/bin/env node
+// Shardlands command line for agents. Talks to the match's local turn server.
+// Usage: shard help
+const url = process.env.SHARD_URL;
+const token = process.env.SHARD_TOKEN;
+if (!url || !token) {
+  console.error("shard: not connected to a game (SHARD_URL / SHARD_TOKEN are not set).");
+  process.exit(2);
+}
+try {
+  const res = await fetch(`${url}/exec`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token, argv: process.argv.slice(2) }),
+  });
+  const { out, code } = await res.json();
+  process.stdout.write(out.endsWith("\n") ? out : out + "\n");
+  process.exit(code ?? 0);
+} catch (err) {
+  console.error(`shard: could not reach the game (${err?.message ?? err}).`);
+  process.exit(2);
+}

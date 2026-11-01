@@ -1,29 +1,40 @@
 import type { Ruleset, Terrain } from "./config.js";
-import { type Hex, dist, findPath, inRange, key, neighbors, rng, rotate } from "./hex.js";
+import { type Hex, dist, findPath, inRange, key, neighbors, rng } from "./hex.js";
 import type { Tile } from "./types.js";
 
-/** Capitals for the team in seat 0. Seats 1 and 2 are the same positions rotated 120 and 240 degrees. */
+/**
+ * Capitals for the team in seat 0 (the north). Seat 1 gets the same positions rotated 180
+ * degrees, so both teams face identical geography. Picked by search: every capital is at least
+ * 9 hexes from every enemy capital and 5 from the Heart, and teammates sit 3-4 hexes apart.
+ */
 const SEAT0_CAPITALS: Hex[] = [
-  { q: -6, r: 0 },
-  { q: -4, r: 1 },
-  { q: -6, r: 4 },
+  { q: -5, r: -1 },
+  { q: -2, r: -3 },
+  { q: 0, r: -6 },
+  { q: 3, r: -6 },
 ];
 
-/** Fixed ring around every capital (then rotated), so every agent starts with the same land. */
+/** Fixed ring around every capital, so every agent starts with the same land. */
 const START_RING: Terrain[] = ["plains", "forest", "plains", "hills", "forest", "plains"];
 
-export function capitalsForSeat(seat: number): Hex[] {
-  return SEAT0_CAPITALS.map((h) => rotate(h, seat));
+/** 180 degree rotation about the Heart. */
+export const mirror = (h: Hex): Hex => ({ q: -h.q, r: -h.r });
+
+export function capitalsForSeat(seat: number, perTeam: number): Hex[] {
+  if (perTeam > SEAT0_CAPITALS.length) throw new Error(`at most ${SEAT0_CAPITALS.length} agents per team`);
+  const caps = SEAT0_CAPITALS.slice(0, perTeam);
+  return seat === 0 ? caps : caps.map(mirror);
 }
 
-const passableTerrain = (t: Terrain) => t !== "mountain" && t !== "water";
+export const passableTerrain = (t: Terrain) => t !== "mountain" && t !== "water";
 
 /**
- * Builds a map with exact 3-fold rotational symmetry: terrain is chosen once per rotation orbit,
- * so all three seats face identical geography. The centre hex is the Heart.
+ * Builds a map with exact 180-degree rotational symmetry: terrain is chosen once per mirrored
+ * pair, so both seats face identical geography. The centre hex is the Heart.
  */
 export function generateMap(rules: Ruleset, seed: number): Map<string, Tile> {
-  for (let attempt = 0; attempt < 200; attempt++) {
+  const caps = SEAT0_CAPITALS.slice(0, rules.agentsPerTeam);
+  for (let attempt = 0; attempt < 300; attempt++) {
     const rand = rng(seed + attempt * 7919);
     const tiles = new Map<string, Tile>();
     const weights = Object.entries(rules.terrainWeights) as [Terrain, number][];
@@ -34,38 +45,29 @@ export function generateMap(rules: Ruleset, seed: number): Map<string, Tile> {
       return "plains";
     };
     const set = (h: Hex, t: Terrain) => {
-      for (let k = 0; k < 3; k++) {
-        const x = rotate(h, k);
-        tiles.set(key(x), { ...x, terrain: t });
-      }
+      tiles.set(key(h), { ...h, terrain: t });
+      const m = mirror(h);
+      tiles.set(key(m), { ...m, terrain: t });
     };
-    for (const h of inRange({ q: 0, r: 0 }, rules.mapRadius)) {
-      if (tiles.has(key(h))) continue;
-      set(h, roll());
-    }
+    for (const h of inRange({ q: 0, r: 0 }, rules.mapRadius)) if (!tiles.has(key(h))) set(h, roll());
     tiles.set("0,0", { q: 0, r: 0, terrain: "heart" });
-    // Start areas: capital on plains with a fixed ring, and no ruins/crystal within reach of turn 1.
-    for (const cap of SEAT0_CAPITALS) {
+    for (const cap of caps) {
       set(cap, "plains");
-      neighbors(cap).forEach((n, i) => set(n, START_RING[i]));
+      neighbors(cap).forEach((n, i) => {
+        if (tiles.has(key(n))) set(n, START_RING[i]);
+      });
     }
-    // Ring of hexes next to the heart is always passable so it can be reached.
-    for (const n of neighbors({ q: 0, r: 0 })) {
-      const t = tiles.get(key(n))!;
-      if (!passableTerrain(t.terrain)) set(n, "plains");
-    }
-    // Ensure each seat gets a crystal tile near home (else early tech would hinge on luck).
-    const homeCrystal = [...tiles.values()].some(
-      (t) => t.terrain === "crystal" && SEAT0_CAPITALS.some((c) => dist(c, t) >= 2 && dist(c, t) <= 4),
-    );
+    for (const n of neighbors({ q: 0, r: 0 })) if (!passableTerrain(tiles.get(key(n))!.terrain)) set(n, "plains");
+    // Each side gets a crystal tile near home, or early tech would hinge on luck.
+    const homeCrystal = [...tiles.values()].some((t) => t.terrain === "crystal" && caps.some((c) => dist(c, t) >= 2 && dist(c, t) <= 4));
     if (!homeCrystal) continue;
-    // Everything passable must be reachable from every capital.
+    // Everything passable must be connected.
     const passable = (h: Hex) => {
       const t = tiles.get(key(h));
       return !!t && passableTerrain(t.terrain);
     };
-    const reach = new Set<string>([key(SEAT0_CAPITALS[0])]);
-    let frontier = [SEAT0_CAPITALS[0]];
+    const reach = new Set<string>([key(caps[0])]);
+    let frontier = [caps[0]];
     while (frontier.length) {
       const next: Hex[] = [];
       for (const h of frontier)
@@ -76,12 +78,9 @@ export function generateMap(rules: Ruleset, seed: number): Map<string, Tile> {
           }
       frontier = next;
     }
-    const allPassable = [...tiles.values()].filter((t) => passableTerrain(t.terrain));
-    if (allPassable.length !== reach.size) continue;
-    if (!findPath(SEAT0_CAPITALS[0], { q: 0, r: 0 }, passable)) continue;
+    if ([...tiles.values()].filter((t) => passableTerrain(t.terrain)).length !== reach.size) continue;
+    if (!findPath(caps[0], { q: 0, r: 0 }, passable)) continue;
     return tiles;
   }
   throw new Error("could not generate a valid map");
 }
-
-export { passableTerrain };

@@ -1,5 +1,5 @@
 import { RESOURCES, type Resource, type UnitType } from "../config.js";
-import { type Engine, bundleValue } from "../engine.js";
+import type { Engine } from "../engine.js";
 import { type Hex, dist, inRange, key, rng } from "../hex.js";
 import { passableTerrain } from "../map.js";
 import { foundingSites } from "../observe.js";
@@ -11,11 +11,10 @@ export interface MockStyle {
   military: number; // 0-1 share of production for army
   science: number; // 0-1 eagerness to research
   aggression: number; // 0-1 willingness to declare war
-  trade: number; // 0-1 eagerness to trade across teams
   wonder: number; // 0-1 eagerness for monuments/spire
 }
 
-export const DEFAULT_STYLE: MockStyle = { expand: 3, military: 0.35, science: 0.5, aggression: 0.4, trade: 0.4, wonder: 0.4 };
+export const DEFAULT_STYLE: MockStyle = { expand: 3, military: 0.35, science: 0.5, aggression: 0.4, wonder: 0.4 };
 
 const TECH_PRIORITY: Record<string, string[]> = {
   military: ["bronze", "horsemanship", "tactics", "siegecraft", "steel"],
@@ -48,10 +47,9 @@ export class MockAgent implements Agent {
     const me = e.state.agents.get(this.id)!;
     const team = e.team(me.team);
     if (req.phase === "council") {
-      const target = this.warTarget();
-      if (target && this.rand() < 0.7) d.team_message = `I think we should go after ${e.team(target).name} soon. Massing soldiers.`;
+      if (this.wantsAttack() && this.rand() < 0.7) d.team_message = `Army is ready. Pushing toward ${this.enemyTeam().name}'s nearest town.`;
       else if (this.rand() < 0.4) d.team_message = `Expanding toward the open land. Shout if you need food.`;
-      if (this.rand() < 0.15) d.public_message = this.rand() < 0.5 ? "We want peace and trade with everyone." : "Stay out of our valley.";
+      if (this.rand() < 0.1) d.public_message = this.rand() < 0.5 ? "Stay out of our half and nobody gets hurt." : "We have more soldiers than you think.";
       d.reasoning = "Heuristic bot: coordinate lightly.";
       return d;
     }
@@ -60,35 +58,10 @@ export class MockAgent implements Agent {
     const S = this.style;
     const mySettlements = e.settlementsOf(this.id);
     const myUnits = e.unitsOf(this.id);
-    const enemies = e.state.teams.filter((t) => t.id !== team.id && e.atWar(team.id, t.id)).map((t) => t.id);
-
-    // --- diplomacy (deterministic per team so teammates vote together) ---
-    const wt = this.warTarget();
-    if (wt && !e.atWar(team.id, wt)) orders.push(`war ${wt}`);
-    for (const en of enemies) {
-      const lost = e.stats.get(team.id)!.settlementsLost;
-      const offered = e.state.peaceOffers.has(`${en}>${team.id}`);
-      if ((offered && S.aggression < 0.6) || (lost >= 2 && S.aggression < 0.8)) orders.push(`peace ${en}`);
-    }
-
-    // --- trades ---
-    for (const o of e.state.offers.values()) {
-      if (o.to !== this.id) continue;
-      const canPay = RESOURCES.every((r) => st[r] >= (o.get[r] ?? 0));
-      const fromTeam = e.state.agents.get(o.from)!.team;
-      if (canPay && bundleValue(o.give) >= bundleValue(o.get) * 0.8 && !e.atWar(fromTeam, team.id)) orders.push(`accept ${o.id}`);
-    }
+    const enemies = e.fighting ? [this.enemyTeam().id] : [];
     const income = this.income();
     const upkeep = myUnits.length * e.rules.upkeepPerUnit;
-    if (S.trade > 0.3 && e.state.turn % 3 === this.seatIdx() && this.rand() < S.trade) {
-      const partners = e.state.teams.filter((t) => t.id !== team.id && !e.atWar(t.id, team.id)).flatMap((t) => t.agents);
-      if (partners.length) {
-        const p = partners[Math.floor(this.rand() * partners.length)];
-        const rich = this.richest();
-        const poor = this.poorest(rich);
-        if (st[rich] >= 6) orders.push(`offer ${p} 4 ${rich} for 4 ${poor}`);
-      }
-    }
+
     // --- support teammates ---
     for (const a of team.agents) {
       if (a === this.id) continue;
@@ -168,18 +141,17 @@ export class MockAgent implements Agent {
         if (ruin && dist(ruin, u.pos) <= 8) orders.push(`move ${u.id} ${ruin.q},${ruin.r}`);
         else orders.push(`move ${u.id} ${this.unexploredTarget(u.pos)}`);
       } else {
-        const target = this.attackTarget(u.pos, enemies);
+        const target = this.wantsAttack() ? this.attackTarget(u.pos, enemies) : null;
         const army = myUnits.filter((x) => e.isMilitary(x.type)).length;
         if (target && army >= 3) orders.push(`move ${u.id} ${target.q},${target.r}`);
         else if (!u.dest) {
-          const home = mySettlements.sort((a, b) => dist(a.pos, u.pos) - dist(b.pos, u.pos))[0];
-          if (home && dist(home.pos, u.pos) > 1) orders.push(`move ${u.id} ${home.pos.q},${home.pos.r}`);
+          const home = [...mySettlements].sort((a, b) => e.unitsAt(a.pos).filter((x) => x.team === u.team && x.id !== u.id).length - e.unitsAt(b.pos).filter((x) => x.team === u.team && x.id !== u.id).length || dist(a.pos, u.pos) - dist(b.pos, u.pos))[0];
+          if (home && dist(home.pos, u.pos) > 0) orders.push(`move ${u.id} ${home.pos.q},${home.pos.r}`);
         }
       }
     }
     d.orders = orders;
     d.reasoning = `Heuristic bot (expand ${S.expand.toFixed(1)}, military ${S.military.toFixed(2)}, aggression ${S.aggression.toFixed(2)}).`;
-    if (wt && !e.atWar(team.id, wt)) d.public_message = `${team.name} has had enough of ${e.team(wt).name}.`;
     return d;
   }
 
@@ -188,21 +160,15 @@ export class MockAgent implements Agent {
     return team.agents.indexOf(this.id);
   }
 
-  /** Same answer for every agent of the team (depends only on public state and the shared style). */
-  private warTarget(): string | null {
+  private enemyTeam() {
+    return this.eng.opponentOf(this.eng.teamOf(this.id).id);
+  }
+
+  /** Whether this bot's style says it is time to attack (same answer for the whole team). */
+  private wantsAttack(): boolean {
     const e = this.eng;
-    const team = e.teamOf(this.id);
-    const S = this.style;
-    if (S.aggression < 0.3) return null;
-    if (e.state.turn < Math.round(16 - S.aggression * 12)) return null;
-    if (e.state.teams.some((t) => t.id !== team.id && e.atWar(team.id, t.id))) return null;
-    const sc = e.scores();
-    const others = e.state.teams.filter((t) => t.id !== team.id && e.teamAlive(t.id));
-    if (!others.length) return null;
-    // Leader-bashing if someone is ahead, otherwise pick on the weakest.
-    const leader = others.sort((a, b) => sc.get(b.id)!.total - sc.get(a.id)!.total)[0];
-    if (sc.get(leader.id)!.total > sc.get(team.id)!.total + 4) return leader.id;
-    return others.sort((a, b) => sc.get(a.id)!.total - sc.get(b.id)!.total || a.id.localeCompare(b.id))[0].id;
+    if (!e.fighting) return false;
+    return e.state.turn >= Math.round(e.rules.truceTurns + 1 + (1 - this.style.aggression) * 14);
   }
 
   private attackTarget(from: Hex, enemies: string[]): Hex | null {

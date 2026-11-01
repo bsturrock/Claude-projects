@@ -1,7 +1,6 @@
-import type { Bundle, Level, Resource, Terrain, UnitType } from "./config.js";
+import type { Level, Resource, Terrain, UnitType } from "./config.js";
 import type { Hex } from "./hex.js";
-
-export type Stance = "peace" | "war";
+import type { AgentSession } from "./session.js";
 
 export interface Tile extends Hex {
   terrain: Terrain;
@@ -41,15 +40,6 @@ export interface AgentState {
   stock: Record<Resource, number>;
 }
 
-export interface Offer {
-  id: string;
-  from: string;
-  to: string;
-  give: Bundle;
-  get: Bundle;
-  turn: number;
-}
-
 export interface VpBreakdown {
   settlements: number;
   monuments: number;
@@ -57,7 +47,6 @@ export interface VpBreakdown {
   tech: number;
   glory: number;
   heart: number;
-  commerce: number;
   total: number;
 }
 
@@ -66,15 +55,13 @@ export interface TeamState {
   name: string;
   agents: string[];
   techs: string[];
-  /** Permanent VP earned during play (captures, ruins, heart, trades). */
+  /** Permanent VP earned during play (captures, ruins). */
   glory: number;
+  /** Permanent VP from holding the Heart. */
   heart: number;
-  commerce: number;
-  /** Turn the last commerce VP was earned (one per turn). */
-  commerceTurn: number;
   /** Tile keys this team has ever seen. */
   explored: Set<string>;
-  /** Last-seen settlement owner per explored tile (fog memory). */
+  /** Last-seen settlement per explored tile (fog memory). */
   memory: Map<string, string>;
 }
 
@@ -82,7 +69,7 @@ export interface Message {
   turn: number;
   phase: "council" | "orders";
   from: string;
-  /** "team:<id>", "public", or "embassy:<teamA>|<teamB>" (sorted). */
+  /** "team:<id>" or "public". */
   channel: string;
   text: string;
 }
@@ -104,25 +91,25 @@ export interface GameState {
   agents: Map<string, AgentState>;
   units: Map<string, Unit>;
   settlements: Map<string, Settlement>;
-  /** Key "a|b" (sorted team ids). */
-  stances: Map<string, Stance>;
-  /** Peace proposals: key "from>to" -> turn proposed. */
-  peaceOffers: Map<string, number>;
-  offers: Map<string, Offer>;
   spireBuilt: string | null;
   nextId: number;
   events: GameEvent[];
   messages: Message[];
   over: boolean;
   winner: string | null;
+  /** True when the game ended level on VP and stockpile. */
+  draw: boolean;
 }
 
-/** What an agent sends each phase. */
+/**
+ * What an agent returns from one phase. Tool-using agents act through the session (the
+ * `shard` CLI) and only return their reasoning; JSON and mock agents return command lines in
+ * `orders`, which are run through the same command layer.
+ */
 export interface Decision {
   reasoning: string;
   team_message: string;
   public_message: string;
-  embassy: { team: string; message: string }[];
   orders: string[];
   notes: string;
   thinking?: string;
@@ -141,7 +128,10 @@ export interface DecisionRequest {
   phase: "council" | "orders";
   agentId: string;
   turn: number;
+  /** The briefing text (same as `shard status`). */
   observation: string;
+  /** Live command session for this agent and phase. */
+  session: AgentSession;
 }
 
 export interface Agent {
@@ -150,4 +140,4 @@ export interface Agent {
   close?(): void;
 }
 
-export const emptyDecision = (): Decision => ({ reasoning: "", team_message: "", public_message: "", embassy: [], orders: [], notes: "" });
+export const emptyDecision = (): Decision => ({ reasoning: "", team_message: "", public_message: "", orders: [], notes: "" });

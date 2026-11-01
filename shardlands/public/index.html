@@ -22,8 +22,9 @@
   <form method="dialog" id="newLeagueForm">
     <h2>New league</h2>
     <label>Name <input name="name" required pattern="[A-Za-z0-9_-]+" value="league1"></label>
-    <label>Teams <input name="teams" type="number" min="3" max="8" value="3"></label>
+    <label>Teams in league <input name="teams" type="number" min="2" max="8" value="4"></label>
     <label>Backend <select name="backend"><option value="claude-code">Claude Code (your login)</option><option value="api">Anthropic API</option><option value="mock">Mock bots</option></select></label>
+    <label>Agents act via <select name="interface"><option value="cli">shard CLI (tool use)</option><option value="json">one JSON answer per phase (cheaper)</option></select></label>
     <label>Model <select name="model" id="modelSel"></select></label>
     <label>Effort <select name="effort"><option>low</option><option>medium</option><option>high</option></select></label>
     <label>Turns <input name="turns" type="number" min="5" max="60" value="30"></label>

@@ -1,12 +1,17 @@
-import { LEVELS, RESOURCES, UNIT_TYPES, type Bundle, type Level, type Resource, type Ruleset, type UnitType } from "./config.js";
-import { type Hex, dist, findPath, fmt, inRange, key, rng } from "./hex.js";
+import { LEVELS, RESOURCES, UNIT_TYPES, type Bundle, type Resource, type Ruleset, type UnitType } from "./config.js";
+import { bundleValue } from "./bundle.js";
+import { ORDERS } from "./commands/index.js";
+import { STEPS, type QueuedOrder, type ResolveCtx } from "./commands/types.js";
+import { type Hex, findPath, fmt, inRange, key, rng } from "./hex.js";
 import { capitalsForSeat, generateMap, passableTerrain } from "./map.js";
-import type { AgentState, GameEvent, GameState, Offer, Settlement, Stance, TeamState, Unit, VpBreakdown } from "./types.js";
+import type { AgentState, GameEvent, GameState, Settlement, TeamState, Unit, VpBreakdown } from "./types.js";
+
+export { bundleValue, fmtBundle } from "./bundle.js";
 
 export interface TeamSetup {
   id: string;
   name: string;
-  agents: string[]; // exactly 3, in fixed order
+  agents: string[];
 }
 
 /** Behaviour counters per team, used by the league to compare how strategies differ. */
@@ -17,14 +22,14 @@ export interface TeamStats {
   settlementsLost: number;
   unitsLost: number;
   unitsKilled: number;
-  warsDeclared: number;
-  peacesMade: number;
-  /** Turn of the team's first war declaration, or null. */
-  firstWarTurn: number | null;
-  /** War declared on a team this team was at peace with within the last 3 turns of making peace. */
-  betrayals: number;
-  tradesCross: number;
-  giftsCrossValue: number;
+  /** Battles this team started by moving onto enemy units or settlements. */
+  attacks: number;
+  /** Turn of the first such attack, or null. */
+  firstAttackTurn: number | null;
+  /** Enemy tiles occupied (raided) summed over turns. */
+  raidTileTurns: number;
+  /** Turns this team held the Heart. */
+  heartTurns: number;
   giftsTeamValue: number;
   exchanges: number;
   ruins: number;
@@ -37,11 +42,6 @@ export interface TeamStats {
 }
 
 const BUNDLE_ZERO = (): Record<Resource, number> => ({ food: 0, wood: 0, ore: 0, crystal: 0 });
-export const bundleValue = (b: Bundle) => RESOURCES.reduce((a, r) => a + (b[r] ?? 0), 0);
-export const fmtBundle = (b: Bundle) =>
-  RESOURCES.filter((r) => (b[r] ?? 0) > 0)
-    .map((r) => `${b[r]} ${r}`)
-    .join(", ") || "nothing";
 
 const SETTLEMENT_NAMES = [
   "Ashford", "Brightwater", "Cinder Hollow", "Dunmere", "Eastmarch", "Fallow", "Glimmer", "Harrow", "Ironwell", "Juniper",
@@ -50,39 +50,36 @@ const SETTLEMENT_NAMES = [
   "Foxglove", "Greystone", "Hollin", "Isen", "Larkspur", "Marrow", "Nettle", "Orrin", "Pike", "Rookery",
 ];
 
-export interface ParsedOrder {
-  raw: string;
-  kind: string;
-  args: Record<string, any>;
-}
-
 export interface TurnResult {
-  /** Feedback lines per agent ("OK ..." / "FAILED ..."), shown in their next observation. */
+  /** Feedback lines per agent ("OK ..." / "FAILED ..."), shown in their next briefing. */
   feedback: Map<string, string[]>;
   events: GameEvent[];
 }
 
+/**
+ * Game state and turn resolution for a two-team match. Orders are defined in src/commands
+ * and resolved here step by step; the fixed phases (movement, combat, production) live below.
+ */
 export class Engine {
   state: GameState;
   stats = new Map<string, TeamStats>();
-  /** Turn each pair of teams last made peace (for betrayal stats). */
-  private peaceTurn = new Map<string, number>();
-  private rand: () => number;
+  rand: () => number;
   private nameIdx = 0;
-  /** Seat index per team id (0..2). */
+  /** Seat index per team id (0 = north, 1 = south). */
   seat = new Map<string, number>();
-  /** Units built this turn, spawned after combat. */
-  private pendingSpawns: { owner: string; type: UnitType; settlement: string; cost: Bundle }[] = [];
+  /** Units bought this turn; they appear after combat. */
+  pendingSpawns: { owner: string; type: UnitType; settlement: string; cost: Bundle }[] = [];
   private combatHexes = new Set<string>();
   private startPos = new Map<string, string>();
   feedback = new Map<string, string[]>();
+  private turnEvents: GameEvent[] = [];
 
   constructor(
     public rules: Ruleset,
     teams: TeamSetup[],
     seed: number,
   ) {
-    if (teams.length !== 3) throw new Error("Shardlands needs exactly 3 teams");
+    if (teams.length !== 2) throw new Error("Shardlands is a two-team game");
     this.rand = rng(seed ^ 0x9e3779b9);
     this.state = {
       seed,
@@ -92,28 +89,26 @@ export class Engine {
       agents: new Map(),
       units: new Map(),
       settlements: new Map(),
-      stances: new Map(),
-      peaceOffers: new Map(),
-      offers: new Map(),
       spireBuilt: null,
       nextId: 1,
       events: [],
       messages: [],
       over: false,
       winner: null,
+      draw: false,
     };
     teams.forEach((t, seat) => {
-      if (t.agents.length !== 3) throw new Error(`team ${t.id} needs exactly 3 agents`);
+      if (t.agents.length !== rules.agentsPerTeam) throw new Error(`team ${t.id} needs exactly ${rules.agentsPerTeam} agents`);
       this.seat.set(t.id, seat);
-      const ts: TeamState = { id: t.id, name: t.name, agents: [...t.agents], techs: [], glory: 0, heart: 0, commerce: 0, commerceTurn: 0, explored: new Set(), memory: new Map() };
+      const ts: TeamState = { id: t.id, name: t.name, agents: [...t.agents], techs: [], glory: 0, heart: 0, explored: new Set(), memory: new Map() };
       this.state.teams.push(ts);
       this.stats.set(t.id, {
         unitsBuilt: Object.fromEntries(UNIT_TYPES.map((u) => [u, 0])) as Record<UnitType, number>,
-        settlementsFounded: 0, captures: 0, settlementsLost: 0, unitsLost: 0, unitsKilled: 0, warsDeclared: 0, peacesMade: 0,
-        firstWarTurn: null, betrayals: 0, tradesCross: 0, giftsCrossValue: 0, giftsTeamValue: 0, exchanges: 0, ruins: 0, techs: [],
+        settlementsFounded: 0, captures: 0, settlementsLost: 0, unitsLost: 0, unitsKilled: 0, attacks: 0, firstAttackTurn: null,
+        raidTileTurns: 0, heartTurns: 0, giftsTeamValue: 0, exchanges: 0, ruins: 0, techs: [],
         spend: { military: 0, expansion: 0, development: 0, tech: 0 }, peakSettlements: 0, peakMilitary: 0, orderErrors: 0, ordersIssued: 0,
       });
-      const caps = capitalsForSeat(seat);
+      const caps = capitalsForSeat(seat, rules.agentsPerTeam);
       t.agents.forEach((a, i) => {
         const stock = BUNDLE_ZERO();
         for (const r of RESOURCES) stock[r] = rules.start.stock[r] ?? 0;
@@ -122,8 +117,6 @@ export class Engine {
         for (const u of rules.start.units) this.spawnUnit(a, u, caps[i]);
       });
     });
-    for (let i = 0; i < 3; i++)
-      for (let j = i + 1; j < 3; j++) this.state.stances.set(pairKey(this.state.teams[i].id, this.state.teams[j].id), "peace");
     this.updateVision();
   }
 
@@ -137,15 +130,18 @@ export class Engine {
   teamOf(agent: string): TeamState {
     return this.team(this.state.agents.get(agent)!.team);
   }
+  opponentOf(team: string): TeamState {
+    return this.state.teams.find((t) => t.id !== team)!;
+  }
   hasTech(team: string, tech: string) {
     return this.team(team).techs.includes(tech);
   }
-  stance(a: string, b: string): Stance {
-    if (a === b) return "peace";
-    return this.state.stances.get(pairKey(a, b)) ?? "peace";
+  /** True once the opening truce is over. */
+  get fighting() {
+    return this.state.turn > this.rules.truceTurns;
   }
   atWar(a: string, b: string) {
-    return a !== b && this.stance(a, b) === "war";
+    return a !== b && this.fighting;
   }
   tile(h: Hex) {
     return this.state.tiles.get(key(h));
@@ -180,15 +176,13 @@ export class Engine {
   }
 
   unitStr(u: Unit) {
-    const spec = this.rules.units[u.type];
-    let s = spec.str;
+    let s = this.rules.units[u.type].str;
     if (u.type === "soldier" && this.hasTech(u.team, "bronze")) s += 1;
     if ((u.type === "soldier" || u.type === "rider") && this.hasTech(u.team, "steel")) s += 1;
     return s;
   }
   unitMaxHp(type: UnitType, team: string) {
-    const base = this.rules.units[type].hp;
-    return base + (["soldier", "rider", "catapult"].includes(type) && this.hasTech(team, "tactics") ? 1 : 0);
+    return this.rules.units[type].hp + (["soldier", "rider", "catapult"].includes(type) && this.hasTech(team, "tactics") ? 1 : 0);
   }
   unitMove(u: Unit) {
     return this.rules.units[u.type].move + (u.type === "scout" && this.hasTech(u.team, "cartography") ? 1 : 0);
@@ -232,9 +226,6 @@ export class Engine {
   bankRate(team: string) {
     return this.hasTech(team, "currency") ? this.rules.currencyBankRate : this.rules.bankRate;
   }
-  tradeCap(team: string) {
-    return this.rules.vp.tradeCap + (this.hasTech(team, "guilds") ? 4 : 0);
-  }
 
   techAvailable(team: string, tech: string): string | null {
     const t = this.rules.techs[tech];
@@ -245,7 +236,7 @@ export class Engine {
     return null;
   }
 
-  /** Per-turn yield of a settlement, before blockades. */
+  /** Per-turn yield of a settlement, skipping blockaded tiles. */
   settlementYield(s: Settlement, blockaded = new Set<string>()): Record<Resource, number> {
     const out = BUNDLE_ZERO();
     const lvl = LEVELS.indexOf(s.level);
@@ -262,9 +253,7 @@ export class Engine {
       if (t.terrain === "heart" && this.hasTech(s.team, "crystal_lore")) y.crystal = (y.crystal ?? 0) + 2;
       for (const r of RESOURCES) {
         if (!y[r]) continue;
-        // Level bonus applies to food/wood/ore tiles; crystal is scarce on purpose.
-        const bonus = r === "crystal" ? 0 : lvl * this.rules.levelBonusPerTile;
-        out[r] += y[r]! + bonus;
+        out[r] += y[r]! + (r === "crystal" ? 0 : lvl * this.rules.levelBonusPerTile);
         produced.add(r);
       }
     }
@@ -277,30 +266,33 @@ export class Engine {
   scores(): Map<string, VpBreakdown> {
     const m = new Map<string, VpBreakdown>();
     for (const t of this.state.teams) {
-      const b: VpBreakdown = { settlements: 0, monuments: 0, spire: 0, tech: 0, glory: t.glory, heart: t.heart, commerce: t.commerce, total: 0 };
+      const b: VpBreakdown = { settlements: 0, monuments: 0, spire: 0, tech: 0, glory: t.glory, heart: t.heart, total: 0 };
       for (const s of this.teamSettlements(t.id)) {
         b.settlements += this.rules.vp.settlement[s.level];
         if (s.monument) b.monuments += this.rules.buildings.monument.vp;
         if (s.spire) b.spire += this.rules.buildings.spire.vp;
       }
       for (const tech of t.techs) b.tech += this.rules.vp.techTier[this.rules.techs[tech].tier];
-      b.total = b.settlements + b.monuments + b.spire + b.tech + b.glory + b.heart + b.commerce;
+      b.total = b.settlements + b.monuments + b.spire + b.tech + b.glory + b.heart;
       m.set(t.id, b);
     }
     return m;
   }
 
-  /** Final ranking: eliminated teams last, then VP, then total stockpile. */
+  /** [winner, loser]. An eliminated team always loses; then VP; then total stockpile. */
   ranking(): string[] {
     const sc = this.scores();
     const stockOf = (t: string) => this.team(t).agents.reduce((a, ag) => a + bundleValue(this.state.agents.get(ag)!.stock), 0);
-    return this.state.teams
-      .map((t) => t.id)
-      .sort((a, b) => {
-        const alive = Number(this.teamAlive(b)) - Number(this.teamAlive(a));
-        if (alive) return alive;
-        return sc.get(b)!.total - sc.get(a)!.total || stockOf(b) - stockOf(a);
-      });
+    const cmp = (a: string, b: string) =>
+      Number(this.teamAlive(b)) - Number(this.teamAlive(a)) || sc.get(b)!.total - sc.get(a)!.total || stockOf(b) - stockOf(a);
+    const [a, b] = this.state.teams.map((t) => t.id);
+    return cmp(a, b) <= 0 ? [a, b] : [b, a];
+  }
+  private isTie(): boolean {
+    const [a, b] = this.ranking();
+    const sc = this.scores();
+    const stockOf = (t: string) => this.team(t).agents.reduce((x, ag) => x + bundleValue(this.state.agents.get(ag)!.stock), 0);
+    return this.teamAlive(a) === this.teamAlive(b) && sc.get(a)!.total === sc.get(b)!.total && stockOf(a) === stockOf(b);
   }
 
   // ---------- vision ----------
@@ -317,8 +309,7 @@ export class Engine {
 
   updateVision() {
     for (const t of this.state.teams) {
-      const vis = this.visibleTo(t.id);
-      for (const k of vis) {
+      for (const k of this.visibleTo(t.id)) {
         t.explored.add(k);
         const s = this.settlementAt(parseHex(k));
         if (s) t.memory.set(k, `${s.id} ${s.level} of ${s.owner}`);
@@ -327,50 +318,48 @@ export class Engine {
     }
   }
 
-  // ---------- helpers that mutate ----------
+  // ---------- helpers used by command definitions ----------
 
-  private log(vis: string | null, kind: string, text: string, data?: Record<string, unknown>) {
+  log(vis: string | null, kind: string, text: string, data?: Record<string, unknown>) {
     const e: GameEvent = { turn: this.state.turn, vis, kind, text, data };
     this.state.events.push(e);
     this.turnEvents.push(e);
   }
-  private turnEvents: GameEvent[] = [];
-
-  private fb(agent: string, line: string) {
+  fb(agent: string, line: string) {
     if (!this.feedback.has(agent)) this.feedback.set(agent, []);
     this.feedback.get(agent)!.push(line);
   }
-
-  private canAfford(agent: string, cost: Bundle) {
+  canAfford(agent: string, cost: Bundle) {
     const st = this.state.agents.get(agent)!.stock;
     return RESOURCES.every((r) => st[r] >= (cost[r] ?? 0));
   }
-  private pay(agent: string, cost: Bundle, category?: keyof TeamStats["spend"]) {
+  pay(agent: string, cost: Bundle, category?: keyof TeamStats["spend"]) {
     const a = this.state.agents.get(agent)!;
     for (const r of RESOURCES) a.stock[r] -= cost[r] ?? 0;
     if (category) this.stats.get(a.team)!.spend[category] += bundleValue(cost);
   }
-  private gain(agent: string, b: Bundle) {
+  gain(agent: string, b: Bundle) {
     const a = this.state.agents.get(agent)!;
     for (const r of RESOURCES) a.stock[r] += b[r] ?? 0;
   }
-  private missing(agent: string, cost: Bundle) {
-    const st = this.state.agents.get(agent)!.stock;
-    return fmtBundle(Object.fromEntries(RESOURCES.map((r) => [r, Math.max(0, (cost[r] ?? 0) - st[r])])) as Bundle);
+  missing(agent: string, cost: Bundle, stock?: Record<Resource, number>) {
+    const st = stock ?? this.state.agents.get(agent)!.stock;
+    const m: Bundle = {};
+    for (const r of RESOURCES) if ((cost[r] ?? 0) > st[r]) m[r] = (cost[r] ?? 0) - st[r];
+    return RESOURCES.filter((r) => m[r]).map((r) => `${m[r]} ${r}`).join(", ");
   }
-
-  private newId(prefix: string) {
+  newId(prefix: string) {
     return `${prefix}${this.state.nextId++}`;
   }
 
-  private spawnUnit(owner: string, type: UnitType, pos: Hex): Unit {
+  spawnUnit(owner: string, type: UnitType, pos: Hex): Unit {
     const team = this.state.agents.get(owner)!.team;
     const u: Unit = { id: this.newId("u"), type, owner, team, pos: { ...pos }, hp: this.unitMaxHp(type, team), dest: null };
     this.state.units.set(u.id, u);
     return u;
   }
 
-  private foundSettlement(owner: string, pos: Hex, initial = false): Settlement {
+  foundSettlement(owner: string, pos: Hex, initial = false): Settlement {
     const team = this.state.agents.get(owner)!.team;
     const claims: string[] = [];
     for (const h of inRange(pos, 1)) {
@@ -380,16 +369,7 @@ export class Engine {
     const s: Settlement = {
       id: this.newId("s"),
       name: SETTLEMENT_NAMES[this.nameIdx++ % SETTLEMENT_NAMES.length],
-      owner,
-      team,
-      pos: { ...pos },
-      level: "village",
-      hp: 0,
-      walls: false,
-      monument: false,
-      spire: false,
-      founded: this.state.turn,
-      claims,
+      owner, team, pos: { ...pos }, level: "village", hp: 0, walls: false, monument: false, spire: false, founded: this.state.turn, claims,
     };
     s.hp = this.settlementMaxHp(s);
     this.state.settlements.set(s.id, s);
@@ -400,209 +380,77 @@ export class Engine {
   findUnit(agent: string, id: string): Unit | string {
     const u = this.state.units.get(id);
     if (!u) return `no unit ${id}`;
-    if (u.owner !== agent) return `${id} is not your unit`;
+    if (u.owner !== agent) return `${id} belongs to ${u.owner}, not you (you can only command your own units)`;
     return u;
   }
   findSettlement(agent: string, ref: string): Settlement | string {
     let s = this.state.settlements.get(ref);
     if (!s) s = [...this.state.settlements.values()].find((x) => x.name.toLowerCase() === ref.toLowerCase());
     if (!s) return `no settlement ${ref}`;
-    if (s.owner !== agent) return `${ref} is not your settlement`;
+    if (s.owner !== agent) return `${ref} belongs to ${s.owner}, not you`;
     return s;
   }
 
-  // ---------- order parsing ----------
-
-  parse(agent: string, raw: string): ParsedOrder | string {
-    const text = raw.trim().toLowerCase().replace(/[(),:;]/g, " ").replace(/\s+/g, " ").trim();
-    const tok = text.split(" ").filter(Boolean);
-    const verb = tok[0];
-    const rest = tok.slice(1);
-    const coord = (a: string[]): Hex | null => {
-      const nums = a.map(Number);
-      if (nums.length < 2 || nums.slice(0, 2).some((n) => !Number.isInteger(n))) return null;
-      return { q: nums[0], r: nums[1] };
+  passableFor(u: Unit) {
+    return (h: Hex) => {
+      const t = this.tile(h);
+      if (!t || !passableTerrain(t.terrain)) return false;
+      const s = this.settlementAt(h);
+      // Enemy settlements are closed during the truce.
+      if (s && s.team !== u.team && !this.atWar(s.team, u.team)) return false;
+      return true;
     };
-    switch (verb) {
-      case "move":
-      case "goto": {
-        const h = coord(rest.slice(1).filter((x) => x !== "to"));
-        if (!rest[0] || !h) return "usage: move <unit> <q>,<r>";
-        return { raw, kind: "move", args: { unit: rest[0], to: h } };
-      }
-      case "stop":
-      case "hold":
-        if (!rest[0]) return "usage: stop <unit>";
-        return { raw, kind: "stop", args: { unit: rest[0] } };
-      case "found":
-      case "settle":
-        if (!rest[0]) return "usage: found <settler>";
-        return { raw, kind: "found", args: { unit: rest[0] } };
-      case "build":
-      case "train": {
-        const type = singular(rest[0]) as UnitType;
-        if (!UNIT_TYPES.includes(type)) return `unknown unit type "${rest[0]}" (types: ${UNIT_TYPES.join(", ")})`;
-        const at = rest.filter((x) => x !== "at" && x !== "in")[1];
-        if (!at) return "usage: build <type> <settlement>";
-        return { raw, kind: "build", args: { type, at } };
-      }
-      case "upgrade":
-        if (!rest[0]) return "usage: upgrade <settlement>";
-        return { raw, kind: "upgrade", args: { at: rest[0] } };
-      case "construct": {
-        const what = rest[0];
-        if (!["walls", "wall", "monument", "spire"].includes(what)) return "usage: construct walls|monument|spire <settlement>";
-        const at = rest.filter((x) => x !== "at" && x !== "in")[1];
-        if (!at) return "usage: construct walls|monument|spire <settlement>";
-        return { raw, kind: "construct", args: { what: what === "wall" ? "walls" : what, at } };
-      }
-      case "research": {
-        const tech = rest.join("_");
-        const id = Object.keys(this.rules.techs).find((k) => k === tech || this.rules.techs[k].name.toLowerCase().replace(/ /g, "_") === tech);
-        if (!id) return `unknown tech "${rest.join(" ")}"`;
-        return { raw, kind: "research", args: { tech: id } };
-      }
-      case "give":
-      case "send": {
-        const to = rest[0];
-        const b = parseBundle(rest.slice(1));
-        if (!to || typeof b === "string") return typeof b === "string" ? b : "usage: give <agent> <n> <resource> ...";
-        return { raw, kind: "give", args: { to, bundle: b } };
-      }
-      case "offer": {
-        const to = rest[0];
-        const i = rest.indexOf("for");
-        if (!to || i < 0) return "usage: offer <agent> <n> <resource> ... for <n> <resource> ...";
-        const give = parseBundle(rest.slice(1, i).filter((x) => x !== "give"));
-        const get = parseBundle(rest.slice(i + 1));
-        if (typeof give === "string") return give;
-        if (typeof get === "string") return get;
-        return { raw, kind: "offer", args: { to, give, get } };
-      }
-      case "accept":
-        if (!rest[0]) return "usage: accept <offer-id>";
-        return { raw, kind: "accept", args: { id: rest[0] } };
-      case "exchange":
-      case "bank": {
-        const i = rest.indexOf("for");
-        if (i < 0) return "usage: exchange <n> <resource> for <resource>";
-        const give = parseBundle(rest.slice(0, i));
-        const want = normRes(rest[i + 1]);
-        if (typeof give === "string") return give;
-        const gr = RESOURCES.filter((r) => give[r]);
-        if (gr.length !== 1 || !want) return "usage: exchange <n> <resource> for <resource>";
-        if (want === gr[0]) return "cannot exchange a resource for itself";
-        if (want === "crystal") return "the bank does not sell crystal (get it from crystal tiles, the Heart, ruins or trade)";
-        return { raw, kind: "exchange", args: { res: gr[0], n: give[gr[0]]!, want } };
-      }
-      case "war":
-      case "declare": {
-        const t = rest.filter((x) => x !== "war" && x !== "on")[0];
-        if (!t) return "usage: war <team>";
-        return { raw, kind: "war", args: { team: t } };
-      }
-      case "peace":
-        if (!rest[0]) return "usage: peace <team>";
-        return { raw, kind: "peace", args: { team: rest[0] } };
-      case "disband":
-        if (!rest[0]) return "usage: disband <unit>";
-        return { raw, kind: "disband", args: { unit: rest[0] } };
-      default:
-        return `unknown order "${verb ?? ""}"`;
+  }
+
+  shuffled<T>(a: T[]): T[] {
+    const b = [...a];
+    for (let i = b.length - 1; i > 0; i--) {
+      const j = Math.floor(this.rand() * (i + 1));
+      [b[i], b[j]] = [b[j], b[i]];
     }
+    return b;
   }
 
   // ---------- turn resolution ----------
 
-  resolveTurn(orders: Map<string, string[]>): TurnResult {
+  /**
+   * Resolves one turn. `orders` are validated, queued orders per agent (from the command
+   * layer). Each order resolves at its step; within a step, agents go in random order and each
+   * agent's orders go in the order they were queued.
+   */
+  resolveTurn(orders: Map<string, QueuedOrder[]>): TurnResult {
     this.feedback = new Map();
     this.turnEvents = [];
     this.pendingSpawns = [];
     this.combatHexes = new Set();
     this.startPos = new Map([...this.state.units.values()].map((u) => [u.id, key(u.pos)]));
     for (const s of this.state.settlements.values()) s.attackedThisTurn = false;
+    if (this.state.turn === this.rules.truceTurns + 1) this.log(null, "truce", `The truce is over. From now on, units that meet will fight.`);
 
-    const parsed = new Map<string, ParsedOrder[]>();
-    for (const [agent, list] of orders) {
-      const team = this.state.agents.get(agent)!.team;
-      const st = this.stats.get(team)!;
-      const ok: ParsedOrder[] = [];
-      for (const raw of list.slice(0, this.rules.maxOrdersPerTurn)) {
-        if (!raw.trim()) continue;
-        st.ordersIssued++;
-        const p = this.parse(agent, raw);
-        if (typeof p === "string") {
-          st.orderErrors++;
-          this.fb(agent, `FAILED "${raw}": ${p}`);
-        } else ok.push(p);
-      }
-      if (list.length > this.rules.maxOrdersPerTurn) this.fb(agent, `Only your first ${this.rules.maxOrdersPerTurn} orders were read.`);
-      parsed.set(agent, ok);
-    }
-    const ofKind = (k: string) => [...parsed.entries()].flatMap(([a, ps]) => ps.filter((p) => p.kind === k).map((p) => ({ agent: a, p })));
-    const fail = (agent: string, p: ParsedOrder, why: string) => {
-      this.stats.get(this.state.agents.get(agent)!.team)!.orderErrors++;
-      this.fb(agent, `FAILED "${p.raw}": ${why}`);
+    const ctx: ResolveCtx = {
+      builtAt: new Set(),
+      fail: (agent, raw, why) => {
+        this.stats.get(this.state.agents.get(agent)!.team)!.orderErrors++;
+        this.fb(agent, `FAILED "${raw}": ${why}`);
+      },
     };
-
-    // 1. Diplomacy.
-    this.resolveDiplomacy(ofKind("war"), ofKind("peace"), fail);
-
-    // 2. Economy: accepted trades, then gifts, then each agent's purchases in the order they listed them.
-    for (const { agent, p } of ofKind("accept")) this.resolveAccept(agent, p, fail);
-    for (const { agent, p } of ofKind("give")) this.resolveGive(agent, p, fail);
-    const builtAt = new Set<string>();
-    for (const [agent, ps] of this.shuffled([...parsed.entries()])) {
-      for (const p of ps) {
-        if (p.kind === "exchange") this.resolveExchange(agent, p, fail);
-        else if (p.kind === "research") this.resolveResearch(agent, p, fail);
-        else if (p.kind === "upgrade") this.resolveUpgrade(agent, p, fail);
-        else if (p.kind === "construct") this.resolveConstruct(agent, p, fail);
-        else if (p.kind === "build") this.resolveBuild(agent, p, fail, builtAt);
-        else if (p.kind === "disband") {
-          const u = this.findUnit(agent, p.args.unit);
-          if (typeof u === "string") fail(agent, p, u);
-          else {
-            this.state.units.delete(u.id);
-            this.fb(agent, `OK disbanded ${u.id}`);
-          }
+    for (const [agent, list] of orders) this.stats.get(this.state.agents.get(agent)!.team)!.ordersIssued += list.length;
+    const agentOrder = this.shuffled([...orders.keys()]);
+    for (const step of STEPS) {
+      for (const def of ORDERS.filter((d) => d.step === step && d.resolveAll)) {
+        const items = agentOrder.flatMap((agent) => orders.get(agent)!.filter((o) => o.name === def.name).map((o) => ({ agent, a: o.args, raw: o.raw })));
+        if (items.length) def.resolveAll!(this, items, ctx);
+      }
+      for (const agent of agentOrder)
+        for (const o of orders.get(agent)!) {
+          const def = ORDERS.find((d) => d.name === o.name)!;
+          if (def.step === step && def.resolve) def.resolve(this, agent, o.args, o.raw, ctx);
         }
-      }
+      if (step === "movement") this.resolveMovement();
     }
-    for (const { agent, p } of ofKind("offer")) this.resolveOffer(agent, p, fail);
 
-    // 3. Found settlements (settlers found where they stand, before moving).
-    for (const { agent, p } of this.shuffled(ofKind("found"))) this.resolveFound(agent, p, fail);
-
-    // 4. Movement.
-    for (const { agent, p } of [...ofKind("stop"), ...ofKind("move")]) {
-      const u = this.findUnit(agent, p.args.unit);
-      if (typeof u === "string") {
-        fail(agent, p, u);
-        continue;
-      }
-      if (p.kind === "stop") {
-        u.dest = null;
-        this.fb(agent, `OK ${u.id} holds position`);
-        continue;
-      }
-      const to = p.args.to as Hex;
-      if (!this.tile(to)) {
-        fail(agent, p, `${fmt(to)} is off the map`);
-        continue;
-      }
-      if (!passableTerrain(this.tile(to)!.terrain)) {
-        fail(agent, p, `${fmt(to)} is ${this.tile(to)!.terrain} (impassable)`);
-        continue;
-      }
-      u.dest = { ...to };
-    }
-    this.resolveMovement();
-
-    // 5. Combat and captures.
     this.resolveCombat();
 
-    // 6. New units appear.
     for (const sp of this.pendingSpawns) {
       const s = this.state.settlements.get(sp.settlement);
       if (!s || s.owner !== sp.owner) {
@@ -610,31 +458,24 @@ export class Engine {
         this.fb(sp.owner, `REFUNDED ${sp.type}: ${sp.settlement} was lost before it was ready`);
         continue;
       }
+      if (this.unitsAt(s.pos).filter((x) => x.team === s.team).length >= this.rules.maxStack) {
+        this.gain(sp.owner, sp.cost);
+        this.fb(sp.owner, `REFUNDED ${sp.type}: ${s.id} is full (max ${this.rules.maxStack} units per hex per team)`);
+        continue;
+      }
       const u = this.spawnUnit(sp.owner, sp.type, s.pos);
       this.fb(sp.owner, `NEW ${u.type} ${u.id} at ${s.id} ${fmt(s.pos)}`);
     }
 
-    // 7. Ruins.
     this.resolveRuins();
-
-    // 8-10. Production, upkeep, healing.
     this.resolveEconomy();
 
-    // 11. Heart.
     const heart = this.settlementAt({ q: 0, r: 0 });
     if (heart) {
       this.team(heart.team).heart += this.rules.vp.heartPerTurn;
+      this.stats.get(heart.team)!.heartTurns++;
     }
 
-    // 12. Offers expire.
-    for (const [id, o] of this.state.offers)
-      if (this.state.turn - o.turn >= this.rules.offerTtl) {
-        this.state.offers.delete(id);
-        this.fb(o.from, `Offer ${id} to ${o.to} expired.`);
-      }
-    for (const [k, t] of this.state.peaceOffers) if (this.state.turn - t >= 2) this.state.peaceOffers.delete(k);
-
-    // 13. Vision, stats, end check.
     this.updateVision();
     for (const t of this.state.teams) {
       const st = this.stats.get(t.id)!;
@@ -646,289 +487,12 @@ export class Engine {
     const hit = [...sc.values()].some((b) => b.total >= this.rules.vpTarget);
     if (this.state.turn >= this.rules.turns || hit || alive.length <= 1) {
       this.state.over = true;
-      this.state.winner = this.ranking()[0];
-      this.log(null, "end", `Game over after turn ${this.state.turn}. ${this.team(this.state.winner).name} wins.`);
+      this.state.draw = this.isTie();
+      this.state.winner = this.state.draw ? null : this.ranking()[0];
+      const why = alive.length <= 1 ? "by elimination" : hit ? `by reaching ${this.rules.vpTarget} VP` : "on VP at the turn limit";
+      this.log(null, "end", this.state.draw ? `Game over after turn ${this.state.turn}: a draw.` : `Game over after turn ${this.state.turn}. ${this.team(this.state.winner!).name} wins ${why}.`);
     } else this.state.turn++;
     return { feedback: this.feedback, events: this.turnEvents };
-  }
-
-  private shuffled<T>(a: T[]): T[] {
-    const b = [...a];
-    for (let i = b.length - 1; i > 0; i--) {
-      const j = Math.floor(this.rand() * (i + 1));
-      [b[i], b[j]] = [b[j], b[i]];
-    }
-    return b;
-  }
-
-  private resolveTeamRef(ref: string): TeamState | undefined {
-    return this.state.teams.find((t) => t.id === ref || t.name.toLowerCase() === ref);
-  }
-
-  private resolveDiplomacy(
-    wars: { agent: string; p: ParsedOrder }[],
-    peaces: { agent: string; p: ParsedOrder }[],
-    fail: (a: string, p: ParsedOrder, why: string) => void,
-  ) {
-    const votes = (list: typeof wars) => {
-      const m = new Map<string, Set<string>>(); // "from>to" -> voters
-      for (const { agent, p } of list) {
-        const from = this.state.agents.get(agent)!.team;
-        const to = this.resolveTeamRef(p.args.team);
-        if (!to) {
-          fail(agent, p, `unknown team "${p.args.team}"`);
-          continue;
-        }
-        if (to.id === from) {
-          fail(agent, p, "that is your own team");
-          continue;
-        }
-        const k = `${from}>${to.id}`;
-        if (!m.has(k)) m.set(k, new Set());
-        m.get(k)!.add(agent);
-      }
-      return m;
-    };
-    const needed = (team: string) => Math.min(2, this.team(team).agents.filter((a) => this.isActive(a)).length || 1);
-    for (const [k, voters] of votes(wars)) {
-      const [from, to] = k.split(">");
-      if (this.atWar(from, to)) {
-        for (const a of voters) this.fb(a, `NOTE already at war with ${this.team(to).name}`);
-        continue;
-      }
-      if (voters.size < needed(from)) {
-        for (const a of voters)
-          this.fb(a, `PENDING war on ${this.team(to).name}: only ${voters.size} of your team voted; ${needed(from)} must order "war ${to}" in the same turn`);
-        continue;
-      }
-      this.state.stances.set(pairKey(from, to), "war");
-      const st = this.stats.get(from)!;
-      st.warsDeclared++;
-      if (st.firstWarTurn === null) st.firstWarTurn = this.state.turn;
-      const pt = this.peaceTurn.get(pairKey(from, to));
-      if (pt !== undefined && this.state.turn - pt <= 3) st.betrayals++;
-      this.state.peaceOffers.delete(`${to}>${from}`);
-      this.log(null, "war", `${this.team(from).name} declared WAR on ${this.team(to).name}.`, { from, to });
-    }
-    for (const [k, voters] of votes(peaces)) {
-      const [from, to] = k.split(">");
-      if (!this.atWar(from, to)) {
-        for (const a of voters) this.fb(a, `NOTE already at peace with ${this.team(to).name}`);
-        continue;
-      }
-      if (voters.size < needed(from)) {
-        for (const a of voters) this.fb(a, `PENDING peace with ${this.team(to).name}: ${needed(from)} of your team must order "peace ${to}" in the same turn`);
-        continue;
-      }
-      if (this.state.peaceOffers.has(`${to}>${from}`)) {
-        this.state.stances.set(pairKey(from, to), "peace");
-        this.state.peaceOffers.delete(`${to}>${from}`);
-        this.peaceTurn.set(pairKey(from, to), this.state.turn);
-        this.stats.get(from)!.peacesMade++;
-        this.stats.get(to)!.peacesMade++;
-        this.log(null, "peace", `${this.team(from).name} and ${this.team(to).name} made PEACE.`, { from, to });
-      } else {
-        this.state.peaceOffers.set(`${from}>${to}`, this.state.turn);
-        this.log(null, "peace_offer", `${this.team(from).name} offers peace to ${this.team(to).name} (they must answer "peace ${from}" within 1 turn).`, { from, to });
-      }
-    }
-    // Simultaneous mutual offers made this turn.
-    for (const [k, t] of [...this.state.peaceOffers]) {
-      const [from, to] = k.split(">");
-      if (t === this.state.turn && this.state.peaceOffers.get(`${to}>${from}`) === this.state.turn && this.atWar(from, to)) {
-        this.state.stances.set(pairKey(from, to), "peace");
-        this.state.peaceOffers.delete(k);
-        this.state.peaceOffers.delete(`${to}>${from}`);
-        this.peaceTurn.set(pairKey(from, to), this.state.turn);
-        this.stats.get(from)!.peacesMade++;
-        this.stats.get(to)!.peacesMade++;
-        this.log(null, "peace", `${this.team(from).name} and ${this.team(to).name} made PEACE.`, { from, to });
-      }
-    }
-  }
-
-  private resolveAccept(agent: string, p: ParsedOrder, fail: (a: string, p: ParsedOrder, why: string) => void) {
-    const o = this.state.offers.get(p.args.id);
-    if (!o) return fail(agent, p, `no open offer ${p.args.id}`);
-    if (o.to !== agent) return fail(agent, p, `offer ${o.id} is not addressed to you`);
-    if (!this.canAfford(o.from, o.give)) {
-      this.state.offers.delete(o.id);
-      return fail(agent, p, `${o.from} can no longer pay; offer ${o.id} cancelled`);
-    }
-    if (!this.canAfford(agent, o.get)) return fail(agent, p, `you lack ${this.missing(agent, o.get)}`);
-    this.pay(o.from, o.give);
-    this.gain(agent, o.give);
-    this.pay(agent, o.get);
-    this.gain(o.from, o.get);
-    this.state.offers.delete(o.id);
-    const ta = this.state.agents.get(o.from)!.team;
-    const tb = this.state.agents.get(agent)!.team;
-    this.fb(agent, `OK trade ${o.id}: received ${fmtBundle(o.give)}, paid ${fmtBundle(o.get)}`);
-    this.fb(o.from, `OK ${agent} accepted ${o.id}: you received ${fmtBundle(o.get)}, paid ${fmtBundle(o.give)}`);
-    if (ta !== tb) {
-      this.stats.get(ta)!.tradesCross++;
-      this.stats.get(tb)!.tradesCross++;
-      const big = bundleValue(o.give) >= this.rules.vp.tradeMinValue && bundleValue(o.get) >= this.rules.vp.tradeMinValue;
-      let vpNote = "";
-      if (big)
-        for (const t of [ta, tb]) {
-          const ts = this.team(t);
-          if (ts.commerceTurn !== this.state.turn && ts.commerce < this.tradeCap(t)) {
-            ts.commerce += this.rules.vp.tradePerTurn;
-            ts.commerceTurn = this.state.turn;
-            vpNote += ` ${ts.name} +${this.rules.vp.tradePerTurn} commerce VP.`;
-          }
-        }
-      this.log(null, "trade", `Trade: ${o.from} gave ${fmtBundle(o.give)} to ${agent} for ${fmtBundle(o.get)}.${vpNote}`, { from: o.from, to: agent });
-    }
-  }
-
-  private resolveGive(agent: string, p: ParsedOrder, fail: (a: string, p: ParsedOrder, why: string) => void) {
-    const to = this.state.agents.get(p.args.to);
-    if (!to) return fail(agent, p, `no agent "${p.args.to}"`);
-    if (to.id === agent) return fail(agent, p, "cannot give to yourself");
-    const b = p.args.bundle as Bundle;
-    if (!this.canAfford(agent, b)) return fail(agent, p, `you lack ${this.missing(agent, b)}`);
-    this.pay(agent, b);
-    this.gain(to.id, b);
-    const mine = this.state.agents.get(agent)!.team;
-    if (mine === to.team) this.stats.get(mine)!.giftsTeamValue += bundleValue(b);
-    else {
-      this.stats.get(mine)!.giftsCrossValue += bundleValue(b);
-      this.log(null, "gift", `${agent} gave ${fmtBundle(b)} to ${to.id}.`);
-    }
-    this.fb(agent, `OK gave ${fmtBundle(b)} to ${to.id}`);
-    this.fb(to.id, `RECEIVED ${fmtBundle(b)} from ${agent}`);
-  }
-
-  private resolveExchange(agent: string, p: ParsedOrder, fail: (a: string, p: ParsedOrder, why: string) => void) {
-    const team = this.state.agents.get(agent)!.team;
-    const rate = this.bankRate(team);
-    const n = Math.floor(p.args.n / rate) * rate;
-    if (n <= 0) return fail(agent, p, `the bank rate is ${rate}:1`);
-    const cost = { [p.args.res]: n } as Bundle;
-    if (!this.canAfford(agent, cost)) return fail(agent, p, `you lack ${this.missing(agent, cost)}`);
-    this.pay(agent, cost);
-    this.gain(agent, { [p.args.want]: n / rate } as Bundle);
-    this.stats.get(team)!.exchanges++;
-    this.fb(agent, `OK exchanged ${n} ${p.args.res} for ${n / rate} ${p.args.want}`);
-  }
-
-  private resolveResearch(agent: string, p: ParsedOrder, fail: (a: string, p: ParsedOrder, why: string) => void) {
-    const team = this.state.agents.get(agent)!.team;
-    const why = this.techAvailable(team, p.args.tech);
-    if (why) return fail(agent, p, why);
-    const t = this.rules.techs[p.args.tech];
-    if (!this.canAfford(agent, t.cost)) return fail(agent, p, `you lack ${this.missing(agent, t.cost)}`);
-    this.pay(agent, t.cost, "tech");
-    this.team(team).techs.push(p.args.tech);
-    this.stats.get(team)!.techs.push(p.args.tech);
-    this.log(null, "tech", `${this.team(team).name} discovered ${t.name}.`, { team, tech: p.args.tech });
-    this.fb(agent, `OK researched ${t.name}`);
-  }
-
-  private resolveUpgrade(agent: string, p: ParsedOrder, fail: (a: string, p: ParsedOrder, why: string) => void) {
-    const s = this.findSettlement(agent, p.args.at);
-    if (typeof s === "string") return fail(agent, p, s);
-    const cost = this.upgradeCost(s);
-    if (!cost) return fail(agent, p, `${s.id} is already a city`);
-    if (s.level === "town" && !this.hasTech(s.team, this.rules.settlement.cityRequires)) return fail(agent, p, `cities need ${this.rules.settlement.cityRequires}`);
-    if (!this.canAfford(agent, cost)) return fail(agent, p, `you lack ${this.missing(agent, cost)}`);
-    this.pay(agent, cost, "development");
-    const before = this.settlementMaxHp(s);
-    s.level = LEVELS[LEVELS.indexOf(s.level) + 1];
-    s.hp += this.settlementMaxHp(s) - before;
-    this.fb(agent, `OK ${s.id} is now a ${s.level}`);
-    this.log(this.state.agents.get(agent)!.team, "upgrade", `${agent} upgraded ${s.name} (${s.id}) to a ${s.level}.`);
-  }
-
-  private resolveConstruct(agent: string, p: ParsedOrder, fail: (a: string, p: ParsedOrder, why: string) => void) {
-    const s = this.findSettlement(agent, p.args.at);
-    if (typeof s === "string") return fail(agent, p, s);
-    const B = this.rules.buildings;
-    if (p.args.what === "walls") {
-      if (s.walls) return fail(agent, p, `${s.id} already has walls`);
-      const cost = this.wallsCost(s.team);
-      if (!this.canAfford(agent, cost)) return fail(agent, p, `you lack ${this.missing(agent, cost)}`);
-      this.pay(agent, cost, "military");
-      s.walls = true;
-      s.hp += B.walls.hp;
-      this.fb(agent, `OK walls built at ${s.id}`);
-    } else if (p.args.what === "monument") {
-      if (s.monument) return fail(agent, p, `${s.id} already has a monument`);
-      if (!this.hasTech(s.team, B.monument.requires)) return fail(agent, p, `monuments need ${B.monument.requires}`);
-      if (!this.canAfford(agent, B.monument.cost)) return fail(agent, p, `you lack ${this.missing(agent, B.monument.cost)}`);
-      this.pay(agent, B.monument.cost, "development");
-      s.monument = true;
-      this.fb(agent, `OK monument built at ${s.id} (+${B.monument.vp} VP while you hold it)`);
-      this.log(null, "monument", `${this.team(s.team).name} built a Monument in ${s.name} (${s.id}).`);
-    } else {
-      if (this.state.spireBuilt) return fail(agent, p, "the Shard Spire has already been built");
-      if (!this.hasTech(s.team, B.spire.requires)) return fail(agent, p, `the Spire needs ${B.spire.requires}`);
-      if (LEVELS.indexOf(s.level) < LEVELS.indexOf(B.spire.level)) return fail(agent, p, `the Spire must be built in a ${B.spire.level}`);
-      if (!this.canAfford(agent, B.spire.cost)) return fail(agent, p, `you lack ${this.missing(agent, B.spire.cost)}`);
-      this.pay(agent, B.spire.cost, "development");
-      s.spire = true;
-      this.state.spireBuilt = s.team;
-      this.fb(agent, `OK the Shard Spire rises in ${s.id}`);
-      this.log(null, "spire", `${this.team(s.team).name} completed the SHARD SPIRE in ${s.name} (${s.id})! (+${B.spire.vp} VP while held)`);
-    }
-  }
-
-  private resolveBuild(agent: string, p: ParsedOrder, fail: (a: string, p: ParsedOrder, why: string) => void, builtAt: Set<string>) {
-    const s = this.findSettlement(agent, p.args.at);
-    if (typeof s === "string") return fail(agent, p, s);
-    const type = p.args.type as UnitType;
-    const req = this.rules.units[type].requires;
-    if (req && !this.hasTech(s.team, req)) return fail(agent, p, `${type}s need ${req}`);
-    if (builtAt.has(s.id)) return fail(agent, p, `${s.id} already builds a unit this turn (one per settlement per turn)`);
-    const cost = this.unitCost(type, s.team);
-    if (!this.canAfford(agent, cost)) return fail(agent, p, `you lack ${this.missing(agent, cost)}`);
-    const here = this.unitsAt(s.pos).filter((u) => u.team === s.team).length;
-    if (here >= this.rules.maxStack) return fail(agent, p, `${s.id} is full (max ${this.rules.maxStack} units per hex per team); move units out first`);
-    this.pay(agent, cost, type === "settler" || type === "scout" ? "expansion" : "military");
-    builtAt.add(s.id);
-    this.stats.get(s.team)!.unitsBuilt[type]++;
-    this.pendingSpawns.push({ owner: agent, type, settlement: s.id, cost });
-    this.fb(agent, `OK building ${type} at ${s.id} (appears at end of turn)`);
-  }
-
-  private resolveOffer(agent: string, p: ParsedOrder, fail: (a: string, p: ParsedOrder, why: string) => void) {
-    const to = this.state.agents.get(p.args.to);
-    if (!to) return fail(agent, p, `no agent "${p.args.to}"`);
-    if (to.id === agent) return fail(agent, p, "cannot trade with yourself");
-    if (!this.canAfford(agent, p.args.give)) return fail(agent, p, `you lack ${this.missing(agent, p.args.give)}`);
-    const o: Offer = { id: this.newId("t"), from: agent, to: to.id, give: p.args.give, get: p.args.get, turn: this.state.turn };
-    this.state.offers.set(o.id, o);
-    this.fb(agent, `OK offer ${o.id} sent to ${to.id}: your ${fmtBundle(o.give)} for their ${fmtBundle(o.get)} (open ${this.rules.offerTtl} turns)`);
-    this.fb(to.id, `OFFER ${o.id} from ${agent}: they give ${fmtBundle(o.give)}, you give ${fmtBundle(o.get)}. Order "accept ${o.id}" to take it.`);
-  }
-
-  private resolveFound(agent: string, p: ParsedOrder, fail: (a: string, p: ParsedOrder, why: string) => void) {
-    const u = this.findUnit(agent, p.args.unit);
-    if (typeof u === "string") return fail(agent, p, u);
-    if (u.type !== "settler") return fail(agent, p, `${u.id} is a ${u.type}, not a settler`);
-    const t = this.tile(u.pos)!;
-    if (!passableTerrain(t.terrain) || t.terrain === "ruins") return fail(agent, p, `cannot found on ${t.terrain}`);
-    const near = [...this.state.settlements.values()].find((s) => dist(s.pos, u.pos) < this.rules.minSettlementDistance);
-    if (near) return fail(agent, p, `too close to ${near.id} at ${fmt(near.pos)} (minimum distance ${this.rules.minSettlementDistance})`);
-    const hostile = this.unitsAt(u.pos).some((x) => this.atWar(x.team, u.team));
-    if (hostile) return fail(agent, p, "enemy units are on this hex");
-    this.state.units.delete(u.id);
-    const s = this.foundSettlement(agent, u.pos);
-    this.fb(agent, `OK founded ${s.name} (${s.id}) at ${fmt(s.pos)}`);
-    this.log(null, "found", `${agent} (${this.team(u.team).name}) founded ${s.name} (${s.id}) at ${fmt(s.pos)}.`, { team: u.team });
-  }
-
-  private passableFor(u: Unit) {
-    return (h: Hex) => {
-      const t = this.tile(h);
-      if (!t || !passableTerrain(t.terrain)) return false;
-      const s = this.settlementAt(h);
-      // Foreign settlements you are not at war with are closed borders.
-      if (s && s.team !== u.team && !this.atWar(s.team, u.team)) return false;
-      return true;
-    };
   }
 
   private hostileAt(h: Hex, team: string): boolean {
@@ -945,21 +509,19 @@ export class Engine {
         u.dest = null;
         continue;
       }
-      // Path through anything passable; stopping on contact is handled step by step.
       const path = findPath(u.pos, u.dest, this.passableFor(u));
       if (!path) {
         this.fb(u.owner, `BLOCKED ${u.id} has no route to ${fmt(u.dest)}; order cleared`);
         u.dest = null;
         continue;
       }
-      // Units already sharing a hex with an enemy stay engaged unless they move away.
       moving.set(u.id, { path, left: this.unitMove(u), engaged: false });
     }
     const maxSteps = Math.max(0, ...[...moving.values()].map((m) => m.left));
     for (let step = 0; step < maxSteps; step++) {
       const proposals = new Map<string, Hex>();
       for (const [id, m] of moving) if (!m.engaged && m.left > 0 && m.path.length) proposals.set(id, m.path[0]);
-      // Swaps between enemies: only the stronger unit moves.
+      // Enemies trying to swap hexes: only the stronger one moves (into the other).
       for (const [id, to] of proposals) {
         const u = this.state.units.get(id)!;
         for (const [id2, to2] of proposals) {
@@ -967,9 +529,7 @@ export class Engine {
           const v = this.state.units.get(id2)!;
           if (!this.atWar(u.team, v.team)) continue;
           if (key(to) === key(v.pos) && key(to2) === key(u.pos)) {
-            const su = this.unitStr(u) + u.hp;
-            const sv = this.unitStr(v) + v.hp;
-            if (su >= sv) proposals.delete(id2);
+            if (this.unitStr(u) + u.hp >= this.unitStr(v) + v.hp) proposals.delete(id2);
             else proposals.delete(id);
           }
         }
@@ -977,8 +537,7 @@ export class Engine {
       for (const [id, to] of this.shuffled([...proposals.entries()])) {
         const u = this.state.units.get(id)!;
         const m = moving.get(id)!;
-        const friendly = this.unitsAt(to).filter((x) => x.team === u.team).length;
-        if (friendly >= this.rules.maxStack) {
+        if (this.unitsAt(to).filter((x) => x.team === u.team).length >= this.rules.maxStack) {
           m.left = 0;
           this.fb(u.owner, `WAIT ${u.id} stopped: ${fmt(to)} is full`);
           continue;
@@ -1013,10 +572,17 @@ export class Engine {
       const teams = new Set(units.map((u) => u.team));
       if (settlement) teams.add(settlement.team);
       const tl = [...teams];
-      const hostile = tl.some((a) => tl.some((b) => this.atWar(a, b)));
-      if (!hostile) continue;
+      if (tl.length < 2 || !this.atWar(tl[0], tl[1])) continue;
       this.combatHexes.add(k);
       const terrain = this.tile(h)!.terrain;
+      // Attackers: teams that moved a unit onto this hex this turn.
+      for (const t of tl) {
+        if (units.some((u) => u.team === t && this.startPos.get(u.id) !== k)) {
+          const st = this.stats.get(t)!;
+          st.attacks++;
+          st.firstAttackTurn ??= this.state.turn;
+        }
+      }
       const side = (t: string) => {
         const us = units.filter((u) => u.team === t);
         let normal = 0;
@@ -1028,27 +594,16 @@ export class Engine {
           else normal += s;
         }
         if (settlement && settlement.team === t) normal += this.settlementDefense(settlement);
-        return { us, normal, siege, total: normal + siege };
+        return { us, normal, siege };
       };
       const sides = new Map(tl.map((t) => [t, side(t)]));
-      const damage = new Map<string, { normal: number; siege: number }>(tl.map((t) => [t, { normal: 0, siege: 0 }]));
-      for (const t of tl) {
-        const enemies = tl.filter((o) => this.atWar(t, o));
-        if (!enemies.length) continue;
-        const target = enemies.sort((a, b) => sides.get(b)!.total - sides.get(a)!.total)[0];
-        const d = damage.get(target)!;
-        d.normal += sides.get(t)!.normal;
-        d.siege += sides.get(t)!.siege;
-      }
       const report: string[] = [];
       for (const t of tl) {
-        const d = damage.get(t)!;
+        const enemy = sides.get(tl.find((o) => o !== t)!)!;
         const sd = sides.get(t)!;
-        let normal = d.normal;
-        let siege = d.siege;
-        const siegeVsSettlement = settlement && settlement.team === t ? siege * (this.rules.units.catapult.siege ?? 1) : 0;
-        if (siegeVsSettlement) siege = 0;
-        let pool = normal + siege;
+        const defendsSettlement = settlement && settlement.team === t;
+        const siegeVsSettlement = defendsSettlement ? enemy.siege * (this.rules.units.catapult.siege ?? 1) : 0;
+        let pool = enemy.normal + (defendsSettlement ? 0 : enemy.siege);
         // Military units shield civilians; sturdiest first.
         const order = [...sd.us].sort((a, b) => Number(this.isMilitary(b.type)) - Number(this.isMilitary(a.type)) || b.hp - a.hp);
         for (const u of order) {
@@ -1059,11 +614,12 @@ export class Engine {
           if (u.hp <= 0) {
             this.state.units.delete(u.id);
             this.stats.get(u.team)!.unitsLost++;
+            this.stats.get(tl.find((o) => o !== t)!)!.unitsKilled++;
             report.push(`${u.owner}'s ${u.type} ${u.id} was destroyed`);
             this.fb(u.owner, `LOST ${u.type} ${u.id} at ${fmt(h)}`);
           }
         }
-        if (settlement && settlement.team === t) {
+        if (defendsSettlement) {
           const toSettlement = pool + siegeVsSettlement;
           if (toSettlement > 0) {
             settlement.hp = Math.max(0, settlement.hp - toSettlement);
@@ -1072,43 +628,33 @@ export class Engine {
           settlement.attackedThisTurn = true;
         }
       }
-      // Kill credit: count enemy losses per team.
-      const losses = new Map<string, number>();
-      for (const t of tl) losses.set(t, sides.get(t)!.us.filter((u) => !this.state.units.has(u.id)).length);
-      for (const t of tl) {
-        const enemyLoss = tl.filter((o) => this.atWar(t, o)).reduce((a, o) => a + (losses.get(o) ?? 0), 0);
-        this.stats.get(t)!.unitsKilled += enemyLoss;
-      }
-      const names = tl.map((t) => this.team(t).name).join(" vs ");
-      this.log(null, "combat", `Battle at ${fmt(h)} (${names}): ${report.join("; ") || "no losses"}.`, { hex: k, teams: tl });
-      // Capture.
-      if (settlement && settlement.hp <= 0) {
-        const defenders = this.unitsAt(h).filter((u) => u.team === settlement.team);
-        const attackers = this.unitsAt(h).filter((u) => this.atWar(u.team, settlement.team) && this.unitStr(u) > 0);
-        if (!defenders.length && attackers.length) {
-          const byAgent = new Map<string, number>();
-          for (const u of attackers) byAgent.set(u.owner, (byAgent.get(u.owner) ?? 0) + this.unitStr(u));
-          const captor = [...byAgent.entries()].sort((a, b) => b[1] - a[1])[0][0];
-          const ct = this.state.agents.get(captor)!.team;
-          const oldTeam = settlement.team;
-          const oldOwner = settlement.owner;
-          settlement.owner = captor;
-          settlement.team = ct;
-          if (settlement.level !== "village") settlement.level = LEVELS[LEVELS.indexOf(settlement.level) - 1];
-          settlement.walls = false;
-          settlement.hp = Math.ceil(this.settlementMaxHp(settlement) / 2);
-          this.team(ct).glory += this.rules.vp.capture;
-          this.stats.get(ct)!.captures++;
-          this.stats.get(oldTeam)!.settlementsLost++;
-          if (settlement.spire) this.state.spireBuilt = ct;
-          // Pending builds there are refunded by the spawn step.
-          for (const u of this.unitsAt(h)) if (u.team === oldTeam) this.state.units.delete(u.id);
-          this.log(null, "capture", `${captor} (${this.team(ct).name}) CAPTURED ${settlement.name} (${settlement.id}) from ${oldOwner}! +${this.rules.vp.capture} glory VP.`, { team: ct, from: oldTeam });
-          this.fb(oldOwner, `LOST settlement ${settlement.id} ${settlement.name} to ${captor}`);
-          this.fb(captor, `CAPTURED ${settlement.id} ${settlement.name}`);
-        }
-      }
+      this.log(null, "combat", `Battle at ${fmt(h)} (${tl.map((t) => this.team(t).name).join(" vs ")}): ${report.join("; ") || "no losses"}.`, { hex: k, teams: tl });
+      if (settlement && settlement.hp <= 0) this.tryCapture(settlement, h);
     }
+  }
+
+  private tryCapture(settlement: Settlement, h: Hex) {
+    const defenders = this.unitsAt(h).filter((u) => u.team === settlement.team);
+    const attackers = this.unitsAt(h).filter((u) => this.atWar(u.team, settlement.team) && this.unitStr(u) > 0);
+    if (defenders.length || !attackers.length) return;
+    const byAgent = new Map<string, number>();
+    for (const u of attackers) byAgent.set(u.owner, (byAgent.get(u.owner) ?? 0) + this.unitStr(u));
+    const captor = [...byAgent.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    const ct = this.state.agents.get(captor)!.team;
+    const oldTeam = settlement.team;
+    const oldOwner = settlement.owner;
+    settlement.owner = captor;
+    settlement.team = ct;
+    if (settlement.level !== "village") settlement.level = LEVELS[LEVELS.indexOf(settlement.level) - 1];
+    settlement.walls = false;
+    settlement.hp = Math.ceil(this.settlementMaxHp(settlement) / 2);
+    this.team(ct).glory += this.rules.vp.capture;
+    this.stats.get(ct)!.captures++;
+    this.stats.get(oldTeam)!.settlementsLost++;
+    if (settlement.spire) this.state.spireBuilt = ct;
+    this.log(null, "capture", `${captor} (${this.team(ct).name}) CAPTURED ${settlement.name} (${settlement.id}) from ${oldOwner}! +${this.rules.vp.capture} glory VP.`, { team: ct, from: oldTeam });
+    this.fb(oldOwner, `LOST settlement ${settlement.id} ${settlement.name} to ${captor}`);
+    this.fb(captor, `CAPTURED ${settlement.id} ${settlement.name}`);
   }
 
   private resolveRuins() {
@@ -1128,32 +674,32 @@ export class Engine {
       this.team(u.team).glory += L.vp;
       this.stats.get(u.team)!.ruins++;
       t.terrain = "plains";
-      this.fb(u.owner, `RUINS explored by ${u.id} at ${fmt(t)}: found ${fmtBundle(loot)} (+${L.vp} glory VP)`);
+      this.fb(u.owner, `RUINS explored by ${u.id} at ${fmt(t)}: found ${Object.entries(loot).map(([r, v]) => `${v} ${r}`).join(", ")} (+${L.vp} glory VP)`);
       this.log(null, "ruins", `${u.owner} (${this.team(u.team).name}) explored ruins at ${fmt(t)}.`);
     }
   }
 
   private resolveEconomy() {
-    // Tiles with enemy units on them are blockaded and produce nothing for their owner.
-    const blockade = new Map<string, Set<string>>(); // settlement id -> blocked tile keys
+    // Claimed tiles with enemy units on them are raided and produce nothing for their owner.
     for (const s of this.state.settlements.values()) {
-      const b = new Set<string>();
-      for (const k of s.claims) if (this.unitsAt(parseHex(k)).some((u) => this.atWar(u.team, s.team))) b.add(k);
-      blockade.set(s.id, b);
-    }
-    for (const s of this.state.settlements.values()) {
+      const blocked = new Set<string>();
+      for (const k of s.claims) {
+        const raiders = this.unitsAt(parseHex(k)).filter((u) => this.atWar(u.team, s.team));
+        if (raiders.length) {
+          blocked.add(k);
+          this.stats.get(raiders[0].team)!.raidTileTurns++;
+        }
+      }
       if (s.attackedThisTurn) {
         this.fb(s.owner, `BESIEGED ${s.id} produced nothing this turn`);
         continue;
       }
-      const y = this.settlementYield(s, blockade.get(s.id));
-      this.gain(s.owner, y);
-      if (blockade.get(s.id)!.size) this.fb(s.owner, `RAIDED ${s.id}: ${blockade.get(s.id)!.size} tile(s) occupied by enemies produced nothing`);
+      this.gain(s.owner, this.settlementYield(s, blocked));
+      if (blocked.size) this.fb(s.owner, `RAIDED ${s.id}: ${blocked.size} tile(s) occupied by enemies produced nothing`);
     }
     for (const a of this.state.agents.values()) {
       const units = this.unitsOf(a.id);
-      const upkeep = units.length * this.rules.upkeepPerUnit;
-      a.stock.food -= upkeep;
+      a.stock.food -= units.length * this.rules.upkeepPerUnit;
       if (a.stock.food < 0) {
         a.stock.food = 0;
         for (const u of units) {
@@ -1174,8 +720,7 @@ export class Engine {
       const heal = this.hasTech(u.team, "tactics") ? 2 : this.rules.healPerTurn;
       u.hp = Math.min(this.unitMaxHp(u.type, u.team), u.hp + heal);
     }
-    for (const s of this.state.settlements.values())
-      if (!s.attackedThisTurn) s.hp = Math.min(this.settlementMaxHp(s), s.hp + this.rules.settlement.regen);
+    for (const s of this.state.settlements.values()) if (!s.attackedThisTurn) s.hp = Math.min(this.settlementMaxHp(s), s.hp + this.rules.settlement.regen);
   }
 
   // ---------- snapshots for logs / UI ----------
@@ -1186,13 +731,13 @@ export class Engine {
       turn: this.state.turn,
       over: this.state.over,
       winner: this.state.winner,
-      stances: Object.fromEntries(this.state.stances),
+      draw: this.state.draw,
+      fighting: this.fighting,
       teams: this.state.teams.map((t) => ({ id: t.id, name: t.name, agents: t.agents, techs: [...t.techs], vp: sc.get(t.id)!, alive: this.teamAlive(t.id), seat: this.seat.get(t.id) })),
       agents: [...this.state.agents.values()].map((a) => ({ id: a.id, team: a.team, stock: { ...a.stock } })),
       units: [...this.state.units.values()].map((u) => ({ ...u, pos: { ...u.pos }, dest: u.dest ? { ...u.dest } : null, maxHp: this.unitMaxHp(u.type, u.team) })),
       settlements: [...this.state.settlements.values()].map((s) => ({ ...s, pos: { ...s.pos }, claims: [...s.claims], maxHp: this.settlementMaxHp(s) })),
       tiles: [...this.state.tiles.values()].map((t) => ({ q: t.q, r: t.r, t: t.terrain })),
-      offers: [...this.state.offers.values()],
       visible: Object.fromEntries(this.state.teams.map((t) => [t.id, [...this.visibleTo(t.id)]])),
     };
   }
@@ -1200,30 +745,9 @@ export class Engine {
 
 export type Snapshot = ReturnType<Engine["snapshot"]>;
 
-export function pairKey(a: string, b: string) {
-  return a < b ? `${a}|${b}` : `${b}|${a}`;
-}
 export function parseHex(k: string): Hex {
   const [q, r] = k.split(",").map(Number);
   return { q, r };
 }
-function singular(s = "") {
-  return s.replace(/s$/, "");
-}
-function normRes(s = ""): Resource | null {
-  const x = s.replace(/s$/, "");
-  return (RESOURCES as readonly string[]).includes(x) ? (x as Resource) : null;
-}
-/** Parses "3 wood 2 ore" / "3 wood and 2 ore". */
-export function parseBundle(tok: string[]): Bundle | string {
-  const b: Bundle = {};
-  const t = tok.filter((x) => x !== "and" && x !== "&" && x !== "+");
-  if (!t.length) return "missing resources (e.g. 3 wood 2 ore)";
-  for (let i = 0; i < t.length; i += 2) {
-    const n = Number(t[i]);
-    const r = normRes(t[i + 1]);
-    if (!Number.isInteger(n) || n <= 0 || !r) return `could not read "${t.slice(i, i + 2).join(" ")}" (write amounts like: 3 wood 2 ore)`;
-    b[r] = (b[r] ?? 0) + n;
-  }
-  return b;
-}
+
+export type { AgentState };

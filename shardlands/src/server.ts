@@ -90,15 +90,16 @@ createServer(async (req, res) => {
       }));
     if (p === "/api/leagues" && req.method === "POST") {
       const b = await body(req);
-      const l = League.create(String(b.name), Number(b.teams ?? 3), {
+      const l = League.create(String(b.name), Number(b.teams ?? 4), {
         backend: (b.backend ?? "claude-code") as Backend,
         model: b.model ?? MODELS[0],
         debriefModel: b.debriefModel || undefined,
         effort: (b.effort ?? "low") as Effort,
+        interface: b.interface === "json" ? "json" : "cli",
         council: b.council !== false,
         ruleset: b.ruleset ?? "standard",
         turns: b.turns ? Number(b.turns) : undefined,
-        concurrency: Number(b.concurrency ?? 9),
+        concurrency: Number(b.concurrency ?? 8),
       });
       return json(res, 200, { name: l.file.name });
     }

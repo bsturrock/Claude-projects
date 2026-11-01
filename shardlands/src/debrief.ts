@@ -1,10 +1,8 @@
 import { DEFAULT_STYLE, type MockStyle } from "./agents/mock.js";
-import type { Completer } from "./agents/llm.js";
-import { agentSystemPrompt } from "./agents/llm.js";
-import type { MatchLog } from "./match.js";
-import { channelLabelStatic } from "./util.js";
-import { describeStyle, styleVector } from "./metrics.js";
+import { agentSystemPrompt, type AgentInterface, type Completer } from "./agents/llm.js";
 import { rng } from "./hex.js";
+import type { MatchLog } from "./match.js";
+import { describeStyle, styleVector } from "./metrics.js";
 
 export interface TeamRecord {
   id: string;
@@ -12,35 +10,38 @@ export interface TeamRecord {
   agents: string[];
 }
 
-/** The private post-game report for one team: public facts plus that team's own channels. */
-export function gameReport(log: MatchLog, teamId: string, recent: string[]): string {
+/** The private post-game report for one team: public facts plus that team's own channel. */
+export function gameReport(log: MatchLog, teamId: string, history: string[]): string {
   const res = log.result!;
   const team = log.teams.find((t) => t.id === teamId)!;
+  const enemy = log.teams.find((t) => t.id !== teamId)!;
   const name = (id: string) => log.teams.find((t) => t.id === id)?.name ?? id;
-  const place = res.ranking.indexOf(teamId) + 1;
   const L: string[] = [];
-  L.push(`GAME ${log.id} REPORT FOR TEAM ${team.name}`);
-  L.push(`Result: you finished #${place} of 3 after ${res.turns} turns. Final order: ${res.ranking.map((t, i) => `#${i + 1} ${name(t)} ${res.scores[t].total} VP`).join(", ")}.`);
-  L.push(`Seats: ${log.teams.map((t, i) => `seat ${i}: ${t.name}`).join(", ")}.`);
+  L.push(`GAME ${log.id} REPORT FOR TEAM ${team.name} (vs ${enemy.name})`);
+  const outcome = res.draw ? "DRAW" : res.winner === teamId ? "WIN" : "LOSS";
+  L.push(`Result: ${outcome} after ${res.turns} turns. ${team.name} ${res.scores[teamId].total} VP, ${enemy.name} ${res.scores[enemy.id].total} VP.`);
+  L.push(`You played the ${log.teams[0].id === teamId ? "north" : "south"} seat.`);
   L.push("");
   L.push("FINAL VP BREAKDOWN:");
-  for (const t of res.ranking) {
-    const b = res.scores[t];
-    L.push(`  ${name(t)}: total ${b.total} = settlements ${b.settlements} + monuments ${b.monuments} + spire ${b.spire} + tech ${b.tech} + glory ${b.glory} + heart ${b.heart} + commerce ${b.commerce}`);
+  for (const t of log.teams) {
+    const b = res.scores[t.id];
+    L.push(`  ${t.name}: total ${b.total} = settlements ${b.settlements} + monuments ${b.monuments} + spire ${b.spire} + tech ${b.tech} + glory ${b.glory} + heart ${b.heart}`);
   }
   L.push("");
-  L.push("VP OVER TIME (every 3 turns):");
+  L.push("VP AND SETTLEMENTS OVER TIME (every 3 turns):");
   for (const tl of log.turns.filter((t, i, a) => t.turn % 3 === 0 || i === a.length - 1))
-    L.push(`  t${tl.turn}: ${tl.snapshot.teams.map((t) => `${t.name} ${t.vp.total}`).join(", ")}; settlements ${tl.snapshot.teams.map((t) => `${t.name} ${tl.snapshot.settlements.filter((s) => s.team === t.id).length}`).join(", ")}`);
+    L.push(`  t${tl.turn}: ${tl.snapshot.teams.map((t) => `${t.name} ${t.vp.total} VP / ${tl.snapshot.settlements.filter((s) => s.team === t.id).length} settlements / ${tl.snapshot.units.filter((u) => u.team === t.id && u.type !== "scout" && u.type !== "settler").length} military`).join("; ")}`);
   L.push("");
   L.push("WHAT EACH TEAM DID (measured by the engine):");
   for (const t of log.teams) {
     const s = res.stats[t.id];
     const v = styleVector(s, res.scores[t.id], res.turns);
-    L.push(`  ${t.name}: spend military ${s.spend.military} / expansion ${s.spend.expansion} / development ${s.spend.development} / tech ${s.spend.tech}; built ${Object.entries(s.unitsBuilt).filter(([, n]) => n).map(([u, n]) => `${n} ${u}`).join(", ") || "nothing"}; founded ${s.settlementsFounded}, captured ${s.captures}, lost ${s.settlementsLost}; wars declared ${s.warsDeclared}${s.firstWarTurn ? ` (first on turn ${s.firstWarTurn})` : ""}, peaces ${s.peacesMade}, betrayals ${s.betrayals}; cross-team trades ${s.tradesCross}; techs in order: ${s.techs.join(" > ") || "none"}. Profile: ${describeStyle(v)}`);
+    L.push(
+      `  ${t.name}: spend military ${s.spend.military} / expansion ${s.spend.expansion} / development ${s.spend.development} / tech ${s.spend.tech}; built ${Object.entries(s.unitsBuilt).filter(([, n]) => n).map(([u, n]) => `${n} ${u}`).join(", ") || "nothing"}; founded ${s.settlementsFounded}, captured ${s.captures}, lost ${s.settlementsLost}; attacks ${s.attacks}${s.firstAttackTurn ? ` (first on turn ${s.firstAttackTurn})` : ""}; units killed ${s.unitsKilled}, lost ${s.unitsLost}; raided enemy tiles ${s.raidTileTurns} tile-turns; held the Heart ${s.heartTurns} turns; techs in order: ${s.techs.join(" > ") || "none"}. Profile: ${describeStyle(v)}`,
+    );
   }
   const mine = res.stats[teamId];
-  L.push(`  Your team issued ${mine.ordersIssued} orders; ${mine.orderErrors} failed.`);
+  L.push(`  Your team issued ${mine.ordersIssued} orders; ${mine.orderErrors} failed at resolution.`);
   const failures = new Map<string, number>();
   for (const tl of log.turns)
     for (const a of team.agents)
@@ -49,22 +50,21 @@ export function gameReport(log: MatchLog, teamId: string, recent: string[]): str
           const why = f.replace(/^FAILED "[^"]*": /, "").replace(/\d+/g, "N");
           failures.set(why, (failures.get(why) ?? 0) + 1);
         }
-  if (failures.size)
-    L.push(`  Most common failed-order reasons: ${[...failures.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([w, n]) => `${n}x "${w}"`).join("; ")}`);
+  if (failures.size) L.push(`  Most common failure reasons: ${[...failures.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([w, n]) => `${n}x "${w}"`).join("; ")}`);
   L.push("");
-  L.push("KEY EVENTS (public, plus your team's private ones):");
-  const key = new Set(["war", "peace", "peace_offer", "capture", "tech", "found", "monument", "spire", "trade", "gift", "end"]);
-  const evs = log.turns.flatMap((t) => t.events).filter((e) => (e.vis === null || e.vis === teamId) && key.has(e.kind));
-  const combats = log.turns.flatMap((t) => t.events).filter((e) => e.kind === "combat" && ((e.data?.teams as string[]) ?? []).includes(teamId));
+  L.push("KEY EVENTS:");
+  const keyKinds = new Set(["truce", "capture", "tech", "found", "monument", "spire", "ruins", "end"]);
+  const evs = log.turns.flatMap((t) => t.events).filter((e) => (e.vis === null || e.vis === teamId) && keyKinds.has(e.kind));
   for (const e of evs.slice(0, 120)) L.push(`  t${e.turn}: ${e.text}`);
   if (evs.length > 120) L.push(`  ... ${evs.length - 120} more events`);
-  if (combats.length) L.push(`  Your team fought ${combats.length} battles (turns ${[...new Set(combats.map((c) => c.turn))].join(", ")}).`);
+  const battles = log.turns.flatMap((t) => t.events).filter((e) => e.kind === "combat");
+  if (battles.length) L.push(`  ${battles.length} battles were fought (turns ${[...new Set(battles.map((c) => c.turn))].join(", ")}).`);
   L.push("");
-  L.push("MESSAGES (your team channel, your embassies, and public):");
-  const msgs = log.turns.flatMap((t) => t.messages).filter((m) => m.channel === "public" || m.channel === `team:${teamId}` || (m.channel.startsWith("embassy:") && m.channel.includes(teamId)));
-  let budget = 9000;
+  L.push("MESSAGES (your team channel and the public channel):");
+  const msgs = log.turns.flatMap((t) => t.messages).filter((m) => m.channel === "public" || m.channel === `team:${teamId}`);
+  let budget = 10000;
   for (const m of msgs) {
-    const line = `  [t${m.turn} ${channelLabelStatic(m.channel, log.teams)}] ${m.from}: ${m.text.slice(0, 300)}`;
+    const line = `  [t${m.turn} ${m.channel === "public" ? "public" : "team"}] ${m.from}: ${m.text.slice(0, 300)}`;
     if ((budget -= line.length) < 0) {
       L.push("  ... (later messages truncated)");
       break;
@@ -77,10 +77,11 @@ export function gameReport(log: MatchLog, teamId: string, recent: string[]): str
     const last = [...log.turns].reverse().flatMap((t) => t.decisions).find((d) => d.agent === a && d.notes?.trim());
     L.push(`  ${a}: ${last?.notes?.trim().slice(0, 800) ?? "(none)"}`);
   }
-  if (recent.length) {
+  void name;
+  if (history.length) {
     L.push("");
-    L.push("YOUR TEAM'S RECENT LEAGUE RESULTS (most recent last):");
-    for (const r of recent) L.push(`  ${r}`);
+    L.push("YOUR TEAM'S LEAGUE HISTORY (most recent last):");
+    for (const r of history) L.push(`  ${r}`);
   }
   return L.join("\n");
 }
@@ -88,21 +89,21 @@ export function gameReport(log: MatchLog, teamId: string, recent: string[]): str
 const REFLECT_SCHEMA = {
   type: "object",
   properties: {
-    reflection: { type: "string", description: "What worked, what failed and why (under 200 words)." },
-    memory: { type: "string", description: "Your rewritten personal memory for future games (under 250 words). Replaces the old one." },
-    playbook_proposals: { type: "string", description: "Concrete changes you propose to the team playbook (under 200 words)." },
+    reflection: { type: "string", description: "Your reflection on this game, shared with your teammates." },
+    memory: { type: "string", description: "Your personal memory for future games (under 250 words). Replaces the old one. Only you read it." },
   },
-  required: ["reflection", "memory", "playbook_proposals"],
+  required: ["reflection", "memory"],
   additionalProperties: false,
 } as const;
 
 const EDIT_SCHEMA = {
   type: "object",
   properties: {
-    playbook: { type: "string", description: "The complete new team playbook in Markdown (under 900 words). Replaces the old one." },
-    changelog: { type: "string", description: "One or two sentences: what changed and why." },
+    action: { type: "string", enum: ["keep", "rewrite"] },
+    playbook: { type: "string", description: 'The complete new playbook (under 900 words) if action is "rewrite"; otherwise empty.' },
+    changelog: { type: "string", description: "What you changed and why, or why you kept it. Your teammates see this." },
   },
-  required: ["playbook", "changelog"],
+  required: ["action", "playbook", "changelog"],
   additionalProperties: false,
 } as const;
 
@@ -110,11 +111,16 @@ export interface DebriefResult {
   playbook: string;
   changelog: string;
   memories: Record<string, string>;
-  reflections: Record<string, { reflection: string; proposals: string }>;
-  editor: string;
+  reflections: Record<string, { reflection: string }>;
+  edits: { agent: string; action: string; changelog: string }[];
 }
 
-/** LLM debrief: each agent reflects privately, then one rotating "editor" rewrites the playbook. */
+/**
+ * LLM debrief. No roles and no prescribed process: every agent reflects (shared with the team)
+ * and rewrites its own memory, then every agent in a random order may rewrite the team
+ * playbook or keep it, seeing the edits made before it. How the team organises itself is
+ * whatever the team writes into the playbook.
+ */
 export async function llmDebrief(
   completer: Completer,
   rules: string,
@@ -122,51 +128,65 @@ export async function llmDebrief(
   playbook: string,
   memories: Record<string, string>,
   report: string,
-  gameNumber: number,
+  iface: AgentInterface,
+  seed: number,
 ): Promise<DebriefResult> {
   const reflections: DebriefResult["reflections"] = {};
   const newMem: Record<string, string> = {};
+  const sysFor = (a: string, pb: string, mem: string) => agentSystemPrompt(rules, a, team.name, team.agents.length, pb, mem, iface);
   await Promise.all(
     team.agents.map(async (a) => {
-      const sys = agentSystemPrompt(rules, a, team.name, playbook, memories[a] ?? "");
-      const prompt = `${report}\n\nPOST-GAME DEBRIEF. Reflect honestly on this game. Rewrite your personal memory (keep lessons that still hold, drop ones that proved wrong) and propose concrete changes to your team's playbook. You may also record what you learned about the other teams; you will likely meet them again. Answer with the JSON object only.`;
+      const prompt = `${report}\n\nPOST-GAME. Write a reflection on this game (your teammates will read it) and your personal memory for future games (only you will read it). Answer with the JSON object only.`;
       try {
-        const { output } = await completer.complete(sys, prompt, REFLECT_SCHEMA, `${a}-debrief`);
-        reflections[a] = { reflection: String(output.reflection ?? ""), proposals: String(output.playbook_proposals ?? "") };
+        const { output } = await completer.complete(sysFor(a, playbook, memories[a] ?? ""), prompt, REFLECT_SCHEMA, `${a}-debrief`);
+        reflections[a] = { reflection: String(output.reflection ?? "") };
         newMem[a] = String(output.memory ?? memories[a] ?? "").slice(0, 3000);
       } catch (err) {
-        reflections[a] = { reflection: `(debrief failed: ${String(err).slice(0, 150)})`, proposals: "" };
+        reflections[a] = { reflection: `(debrief failed: ${String(err).slice(0, 150)})` };
         newMem[a] = memories[a] ?? "";
       }
     }),
   );
-  const editor = team.agents[gameNumber % team.agents.length];
-  const sys = agentSystemPrompt(rules, editor, team.name, playbook, newMem[editor] ?? "");
-  const prompt = `${report}
+  const r = rng(seed);
+  const order = [...team.agents].sort(() => r() - 0.5);
+  let current = playbook;
+  const edits: DebriefResult["edits"] = [];
+  for (const a of order) {
+    const prompt = `${report}
 
-TEAMMATE REFLECTIONS:
-${team.agents.map((a) => `--- ${a}\nReflection: ${reflections[a].reflection}\nProposed playbook changes: ${reflections[a].proposals}`).join("\n")}
+TEAM REFLECTIONS:
+${team.agents.map((x) => `--- ${x}\n${reflections[x].reflection}`).join("\n")}
+${edits.length ? `\nPLAYBOOK EDITS SO FAR THIS ROUND:\n${edits.map((e) => `${e.agent}: ${e.action} - ${e.changelog}`).join("\n")}\n` : ""}
+CURRENT TEAM PLAYBOOK (shown in your system prompt as well):
+${current.trim() || "(empty)"}
 
-You are this game's playbook EDITOR. Rewrite the team playbook, combining your teammates' proposals with your own judgement. It is read by all three of you at the start of every game, so it should be practical: openings, priorities, role split between the three of you, how to handle each opponent team, diplomacy rules, and mistakes to avoid. Keep what is working. Do not just append; consolidate. Answer with the JSON object only.`;
-  try {
-    const { output } = await completer.complete(sys, prompt, EDIT_SCHEMA, `${editor}-editor`);
-    return { playbook: String(output.playbook ?? playbook).slice(0, 9000), changelog: String(output.changelog ?? ""), memories: newMem, reflections, editor };
-  } catch (err) {
-    return { playbook, changelog: `(editor failed: ${String(err).slice(0, 150)})`, memories: newMem, reflections, editor };
+The playbook is your team's shared document: every teammate reads it at the start of every game. Each of you, in turn, may rewrite it or keep it as it is. It is your turn (${edits.length + 1} of ${order.length}). Answer with the JSON object only.`;
+    try {
+      const { output } = await completer.complete(sysFor(a, current, newMem[a] ?? ""), prompt, EDIT_SCHEMA, `${a}-edit`);
+      const action = output.action === "rewrite" && String(output.playbook ?? "").trim() ? "rewrite" : "keep";
+      if (action === "rewrite") current = String(output.playbook).slice(0, 9000);
+      edits.push({ agent: a, action, changelog: String(output.changelog ?? "") });
+    } catch (err) {
+      edits.push({ agent: a, action: "error", changelog: String(err).slice(0, 150) });
+    }
   }
+  const changelog = edits.filter((e) => e.action === "rewrite").map((e) => `${e.agent}: ${e.changelog}`).join(" | ") || "kept unchanged";
+  return { playbook: current, changelog, memories: newMem, reflections, edits };
 }
 
-/** Mock "learning": a noisy hill-climb on the bot's strategy knobs, kept if it placed well. */
-export function mockDebrief(style: MockStyle | null, best: MockStyle | null, place: number, seed: number): { style: MockStyle; best: MockStyle } {
+/** Mock "learning": a noisy hill-climb on the bot's strategy knobs, kept if it won. */
+export function mockDebrief(style: MockStyle | null, best: MockStyle | null, won: boolean, seed: number): { style: MockStyle; best: MockStyle } {
   const r = rng(seed);
   const cur = style ?? { ...DEFAULT_STYLE };
-  let base = best ?? cur;
-  if (place === 1) base = cur;
+  const base = won ? cur : (best ?? cur);
   const next: MockStyle = { ...base };
-  const keys = Object.keys(next) as (keyof MockStyle)[];
-  for (const k of keys) {
+  for (const k of Object.keys(next) as (keyof MockStyle)[]) {
+    if (!(k in DEFAULT_STYLE)) {
+      delete next[k];
+      continue;
+    }
     const span = k === "expand" ? 1.2 : 0.18;
-    next[k] = next[k] + (r() - 0.5) * 2 * span * (place === 1 ? 0.5 : 1);
+    next[k] = next[k] + (r() - 0.5) * 2 * span * (won ? 0.5 : 1);
     next[k] = k === "expand" ? Math.max(1, Math.min(6, next[k])) : Math.max(0, Math.min(1, next[k]));
   }
   return { style: next, best: base };

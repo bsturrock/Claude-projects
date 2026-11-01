@@ -1,6 +1,9 @@
 import type { Ruleset } from "./config.js";
+import { splitArgs } from "./commands/types.js";
 import { Engine, type Snapshot, type TeamStats } from "./engine.js";
-import { observe } from "./observe.js";
+import { observe, type ObsContext } from "./observe.js";
+import { AgentSession } from "./session.js";
+import { TurnServer } from "./turnserver.js";
 import type { Agent, Decision, GameEvent, Message, VpBreakdown } from "./types.js";
 import { emptyDecision } from "./types.js";
 
@@ -10,9 +13,18 @@ export interface MatchTeam {
   agents: string[];
 }
 
-export interface DecisionLog extends Decision {
+/** What one agent did in one phase. */
+export interface DecisionLog {
   agent: string;
   phase: "council" | "orders";
+  reasoning: string;
+  thinking?: string;
+  /** Every command the agent ran, with the CLI's reply. */
+  transcript: { cmd: string; out: string }[];
+  /** Orders submitted at the end of the phase. */
+  orders: string[];
+  said: { channel: string; text: string }[];
+  notes: string;
   error?: string;
 }
 
@@ -33,11 +45,15 @@ export interface MatchLog {
   council: boolean;
   backend: string;
   model: string;
+  /** Seat order: [north, south]. */
   teams: MatchTeam[];
   initial: Snapshot;
   turns: TurnLog[];
   result: {
+    /** [winner, loser] (by VP then stockpile when drawn on VP). */
     ranking: string[];
+    winner: string | null;
+    draw: boolean;
     scores: Record<string, VpBreakdown>;
     stats: Record<string, TeamStats>;
     turns: number;
@@ -50,7 +66,7 @@ export interface MatchOptions {
   id: string;
   rules: Ruleset;
   seed: number;
-  /** Seat order. */
+  /** Seat order: [north, south]. */
   teams: MatchTeam[];
   /** Agents are created after the engine exists (mock bots read it). */
   makeAgent: (agentId: string, eng: Engine) => Agent;
@@ -62,13 +78,6 @@ export interface MatchOptions {
   gate?: () => Promise<void>;
   /** Max concurrent agent calls. */
   concurrency?: number;
-}
-
-interface Inbox {
-  messages: Message[];
-  events: GameEvent[];
-  feedback: string[];
-  notes: string;
 }
 
 async function pool<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
@@ -89,14 +98,16 @@ export class Match {
   eng: Engine;
   agents = new Map<string, Agent>();
   log: MatchLog;
-  private inbox = new Map<string, Inbox>();
+  server = new TurnServer();
+  private inbox = new Map<string, ObsContext>();
 
   constructor(private o: MatchOptions) {
     this.eng = new Engine(o.rules, o.teams, o.seed);
-    for (const t of o.teams) for (const a of t.agents) {
-      this.agents.set(a, o.makeAgent(a, this.eng));
-      this.inbox.set(a, { messages: [], events: [], feedback: [], notes: "" });
-    }
+    for (const t of o.teams)
+      for (const a of t.agents) {
+        this.agents.set(a, o.makeAgent(a, this.eng));
+        this.inbox.set(a, { phase: "council", messages: [], events: [], feedback: [], notes: "" });
+      }
     this.log = {
       id: o.id,
       startedAt: new Date().toISOString(),
@@ -112,103 +123,108 @@ export class Match {
     };
   }
 
-  private route(from: string, d: Decision, phase: "council" | "orders"): Message[] {
-    const eng = this.eng;
-    const team = eng.teamOf(from);
-    const turn = eng.state.turn;
+  /** Delivers what an agent said this phase to the right inboxes. */
+  private route(from: string, said: { channel: string; text: string }[], phase: "council" | "orders"): Message[] {
+    const team = this.eng.teamOf(from);
     const out: Message[] = [];
-    const deliver = (m: Message, to: string[]) => {
+    for (const x of said) {
+      const m: Message = { turn: this.eng.state.turn, phase, from, channel: x.channel, text: x.text };
       out.push(m);
+      const to = x.channel === "public" ? [...this.inbox.keys()] : team.agents;
       for (const a of to) if (a !== from) this.inbox.get(a)!.messages.push(m);
-    };
-    const clip = (s: string) => s.trim().slice(0, 1200);
-    if (d.team_message?.trim()) deliver({ turn, phase, from, channel: `team:${team.id}`, text: clip(d.team_message) }, team.agents);
-    if (d.public_message?.trim()) deliver({ turn, phase, from, channel: "public", text: clip(d.public_message) }, [...this.inbox.keys()]);
-    for (const em of d.embassy ?? []) {
-      if (!em?.message?.trim()) continue;
-      const other = eng.state.teams.find((t) => t.id === em.team || t.name.toLowerCase() === String(em.team).toLowerCase());
-      if (!other || other.id === team.id) continue;
-      const ch = `embassy:${[team.id, other.id].sort().join("|")}`;
-      deliver({ turn, phase, from, channel: ch, text: clip(em.message) }, [...team.agents, ...other.agents]);
     }
-    eng.state.messages.push(...out);
+    this.eng.state.messages.push(...out);
     return out;
   }
 
-  private async phase(phase: "council" | "orders"): Promise<DecisionLog[]> {
+  /** Feeds a JSON/mock decision's messages and order lines through the session, as if typed into the CLI. */
+  private applyDecision(s: AgentSession, d: Decision) {
+    if (d.team_message?.trim()) s.exec(["say", "team", d.team_message]);
+    if (d.public_message?.trim()) s.exec(["say", "public", d.public_message]);
+    if (s.phase === "orders") for (const line of d.orders ?? []) if (String(line).trim()) s.exec(splitArgs(String(line)));
+    if (d.notes?.trim()) s.notes = d.notes.trim().slice(0, s.limits.notesChars);
+  }
+
+  private async phase(phase: "council" | "orders"): Promise<{ logs: DecisionLog[]; sessions: AgentSession[] }> {
     const eng = this.eng;
     const ids = [...this.agents.keys()].filter((a) => eng.isActive(a) || Object.values(eng.state.agents.get(a)!.stock).some((v) => v > 0));
     this.o.emit?.({ type: "phase", phase, turn: eng.state.turn, agents: ids });
-    const observations = new Map(ids.map((a) => {
+    const sessions = ids.map((a) => {
       const ib = this.inbox.get(a)!;
-      return [a, observe(eng, a, { phase, feedback: ib.feedback, events: ib.events, messages: ib.messages, notes: ib.notes })];
-    }));
-    // Inbox is consumed by this decision.
-    for (const a of ids) {
-      const ib = this.inbox.get(a)!;
-      ib.messages = [];
-      ib.events = [];
-      ib.feedback = [];
-    }
-    const decisions = await pool(ids, this.o.concurrency ?? 9, async (a) => {
-      let d: Decision;
+      const s = new AgentSession(eng, a, phase, { ...ib, phase });
+      s.endpoint = { url: this.server.url, token: this.server.open(s) };
+      // The inbox is consumed by this decision.
+      this.inbox.set(a, { phase, messages: [], events: [], feedback: [], notes: ib.notes });
+      return s;
+    });
+    const logs = await pool(sessions, this.o.concurrency ?? 8, async (s) => {
+      const observation = observe(eng, s.agent, { ...s.ctx, notes: s.notes });
+      let d: Decision = emptyDecision();
       let error: string | undefined;
       try {
-        d = await this.agents.get(a)!.decide({ phase, agentId: a, turn: eng.state.turn, observation: observations.get(a)! });
+        d = await this.agents.get(s.agent)!.decide({ phase, agentId: s.agent, turn: eng.state.turn, observation, session: s });
+        this.applyDecision(s, d);
       } catch (err) {
-        d = emptyDecision();
         error = String(err).slice(0, 300);
       }
-      const log: DecisionLog = { ...d, agent: a, phase, error };
-      this.o.emit?.({ type: "decision", turn: eng.state.turn, decision: log, observation: observations.get(a) });
+      this.inbox.get(s.agent)!.notes = s.notes;
+      const log: DecisionLog = {
+        agent: s.agent,
+        phase,
+        reasoning: d.reasoning,
+        thinking: d.thinking,
+        transcript: s.transcript,
+        orders: s.queue.map((q) => q.raw),
+        said: s.said,
+        notes: s.notes,
+        error,
+      };
+      this.o.emit?.({ type: "decision", turn: eng.state.turn, decision: log, observation });
       return log;
     });
-    return decisions;
+    this.server.closeAll();
+    return { logs, sessions };
   }
 
   async run(): Promise<MatchLog> {
     const eng = this.eng;
     const gate = this.o.gate ?? (async () => {});
+    await this.server.start();
     this.o.emit?.({ type: "start", log: { ...this.log, turns: [] } });
-    while (!eng.state.over) {
-      await gate();
-      const turn = eng.state.turn;
-      const all: DecisionLog[] = [];
-      const messages: Message[] = [];
-      if (this.o.council) {
-        const ds = await this.phase("council");
-        for (const d of ds) {
-          messages.push(...this.route(d.agent, d, "council"));
-          if (d.notes?.trim()) this.inbox.get(d.agent)!.notes = d.notes.trim().slice(0, 1500);
-        }
-        all.push(...ds);
-        this.o.emit?.({ type: "messages", turn, messages });
+    try {
+      while (!eng.state.over) {
         await gate();
+        const turn = eng.state.turn;
+        const all: DecisionLog[] = [];
+        const messages: Message[] = [];
+        if (this.o.council) {
+          const { logs, sessions } = await this.phase("council");
+          for (const s of sessions) messages.push(...this.route(s.agent, s.said, "council"));
+          all.push(...logs);
+          this.o.emit?.({ type: "messages", turn, messages });
+          await gate();
+        }
+        const { logs, sessions } = await this.phase("orders");
+        all.push(...logs);
+        const res = eng.resolveTurn(new Map(sessions.map((s) => [s.agent, s.queue])));
+        // Orders-phase messages are delivered after resolution, so they arrive next turn.
+        for (const s of sessions) messages.push(...this.route(s.agent, s.said, "orders"));
+        for (const [a, ib] of this.inbox) {
+          ib.feedback.push(...(res.feedback.get(a) ?? []));
+          ib.events.push(...res.events);
+        }
+        const t: TurnLog = { turn, decisions: all, messages, events: res.events, feedback: Object.fromEntries(res.feedback), snapshot: eng.snapshot() };
+        this.log.turns.push(t);
+        this.o.emit?.({ type: "turn", turnLog: t });
       }
-      const ds = await this.phase("orders");
-      const orders = new Map<string, string[]>();
-      for (const d of ds) {
-        orders.set(d.agent, (d.orders ?? []).map(String));
-        if (d.notes?.trim()) this.inbox.get(d.agent)!.notes = d.notes.trim().slice(0, 1500);
-      }
-      all.push(...ds);
-      const res = eng.resolveTurn(orders);
-      // Orders-phase messages are delivered after resolution, so they arrive next turn.
-      const late: Message[] = [];
-      for (const d of ds) late.push(...this.route(d.agent, d, "orders"));
-      messages.push(...late);
-      for (const [a, ib] of this.inbox) {
-        ib.feedback.push(...(res.feedback.get(a) ?? []));
-        ib.events.push(...res.events);
-      }
-      const t: TurnLog = { turn, decisions: all, messages, events: res.events, feedback: Object.fromEntries(res.feedback), snapshot: eng.snapshot() };
-      this.log.turns.push(t);
-      this.o.emit?.({ type: "turn", turnLog: t });
+    } finally {
+      this.server.stop();
     }
-    const sc = eng.scores();
     this.log.result = {
       ranking: eng.ranking(),
-      scores: Object.fromEntries(sc),
+      winner: eng.state.winner,
+      draw: eng.state.draw,
+      scores: Object.fromEntries(eng.scores()),
       stats: Object.fromEntries(eng.stats),
       turns: eng.state.turn,
     };
@@ -218,5 +234,6 @@ export class Match {
 
   close() {
     for (const a of this.agents.values()) a.close?.();
+    this.server.stop();
   }
 }

@@ -61,7 +61,12 @@ export interface CliResult {
 
 interface SessionOptions {
   systemPromptFile: string;
-  schema: object;
+  /** JSON schema for structured output. Omit for free-text (tool-using) sessions. */
+  schema?: object;
+  /** Built-in tools to enable, and the permission rules that pre-approve them (everything else is denied). */
+  tools?: { enable: string[]; allow: string[] };
+  /** Extra environment variables for the child (e.g. SHARD_URL / SHARD_TOKEN / PATH). */
+  env?: Record<string, string>;
   model: string;
   effort: Effort;
   /** Persist the transcript so a crashed process can be resumed. One-shot calls don't need it. */
@@ -77,8 +82,10 @@ function baseArgs(o: SessionOptions): string[] {
     "--model", o.model,
     "--effort", o.effort,
     "--system-prompt-file", o.systemPromptFile,
-    "--json-schema", JSON.stringify(o.schema),
-    "--tools", "",
+    ...(o.schema ? ["--json-schema", JSON.stringify(o.schema)] : []),
+    ...(o.tools
+      ? ["--tools", o.tools.enable.join(","), "--allowedTools", ...o.tools.allow, "--permission-mode", "dontAsk"]
+      : ["--tools", ""]),
     "--setting-sources", "",
     "--strict-mcp-config",
     "--disable-slash-commands",
@@ -109,7 +116,7 @@ export class CliSession {
     if (!this.o.persist) args.push("--no-session-persistence");
     else if (this.started) args.push("--resume", this.sessionId);
     else args.push("--session-id", this.sessionId);
-    const child = spawn(CLAUDE_BIN, args, { cwd: WORK_DIR, env: childEnv(), stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(CLAUDE_BIN, args, { cwd: WORK_DIR, env: { ...childEnv(), ...(this.o.env ?? {}) }, stdio: ["pipe", "pipe", "pipe"] });
     live.add(child);
     this.child = child;
     this.buf = "";
@@ -163,7 +170,8 @@ export class CliSession {
       return;
     }
     let output = msg.structured_output;
-    if (output === undefined && typeof msg.result === "string") {
+    if (!this.o.schema) output = String(msg.result ?? "");
+    else if (output === undefined && typeof msg.result === "string") {
       try {
         output = JSON.parse(msg.result);
       } catch {

@@ -14,8 +14,8 @@ const TEAM_ORDER = ["amber", "cobalt", "verdant", "crimson", "ivory", "onyx", "s
 const teamColor = (id) => `var(--t${TEAM_ORDER.indexOf(id) + 1 || 1})`;
 const STYLE_SHORT = {
   military_spend: "Military", expansion_spend: "Expansion", development_spend: "Development", tech_spend: "Tech",
-  aggression: "Aggression", early_war: "Early war", diplomacy: "Peace deals", trade: "Trade", team_support: "Team gifts",
-  vp_land: "VP land", vp_tech: "VP tech", vp_glory: "VP glory", vp_wonders: "VP wonders", vp_commerce: "VP commerce",
+  aggression: "Aggression", early_attack: "Early attack", raiding: "Raiding", heart_control: "Heart held", team_support: "Team gifts",
+  vp_land: "VP land", vp_tech: "VP tech", vp_glory: "VP glory", vp_wonders: "VP wonders", vp_heart: "VP heart",
 };
 
 const S = {
@@ -78,7 +78,7 @@ $("#newLeague").addEventListener("close", async () => {
   try {
     const r = await post("/api/leagues", {
       name: f.get("name"), teams: Number(f.get("teams")), backend: f.get("backend"), model: f.get("model"),
-      effort: f.get("effort"), turns: Number(f.get("turns")), council: f.get("council") === "on",
+      effort: f.get("effort"), interface: f.get("interface"), turns: Number(f.get("turns")), council: f.get("council") === "on",
     });
     S.leagueName = r.name;
     localSet("league", r.name);
@@ -175,7 +175,7 @@ function setupGame() {
   const g = S.game;
   $("#viewAs").innerHTML = `<option value="">Everything</option>` + g.log.teams.map((t) => `<option value="${t.id}">${esc(t.name)}'s view</option>`).join("");
   $("#viewAs").value = S.viewAs = "";
-  const chans = [["all", "All"], ["public", "Public"], ...g.log.teams.map((t) => [`team:${t.id}`, `${t.name} team`]), ["embassy", "Embassies"], ["events", "Events"]];
+  const chans = [["all", "All"], ["public", "Public"], ...g.log.teams.map((t) => [`team:${t.id}`, `${t.name} team`]), ["events", "Events"]];
   $("#chanFilters").innerHTML = chans.map(([v, l]) => `<button data-chan="${v}" class="${S.chan === v ? "active" : ""}">${esc(l)}</button>`).join("");
   $$("#chanFilters button").forEach((b) => (b.onclick = () => { S.chan = b.dataset.chan; setupGame(); renderFeed(); }));
   $("#agentList").innerHTML = g.log.teams.flatMap((t) => t.agents.map((a) => `<button data-agent="${a}" style="border-left:4px solid ${teamColor(t.id)}">${a}</button>`)).join("");
@@ -303,33 +303,27 @@ function renderMap() {
 function renderScores() {
   const snap = currentSnap();
   if (!snap) return;
-  const cols = [["settlements", "Land"], ["monuments", "Mon."], ["spire", "Spire"], ["tech", "Tech"], ["glory", "Glory"], ["heart", "Heart"], ["commerce", "Trade"]];
+  const cols = [["settlements", "Land"], ["monuments", "Mon."], ["spire", "Spire"], ["tech", "Tech"], ["glory", "Glory"], ["heart", "Heart"]];
   const teams = [...snap.teams].sort((a, b) => b.vp.total - a.vp.total);
   const rows = teams.map((t) => {
     const nS = snap.settlements.filter((s) => s.team === t.id).length;
     const nU = snap.units.filter((u) => u.team === t.id).length;
     return `<tr><td><span class="sw" style="background:${teamColor(t.id)}"></span>${esc(t.name)}${t.alive ? "" : " (out)"}</td><td><b>${t.vp.total}</b></td>${cols.map(([k]) => `<td>${t.vp[k]}</td>`).join("")}<td>${nS}</td><td>${nU}</td><td title="${esc(t.techs.join(", "))}">${t.techs.length}</td></tr>`;
   });
-  const stances = Object.entries(snap.stances).map(([k, v]) => {
-    const [a, b] = k.split("|").map((id) => snap.teams.find((t) => t.id === id)?.name ?? id);
-    return `<span class="${v === "war" ? "war" : ""}">${esc(a)}-${esc(b)}: ${v}</span>`;
-  }).join(" &middot; ");
-  const res = S.game.result && S.viewIdx < 0 ? `<div class="small"><b>Final:</b> ${S.game.result.ranking.map((t, i) => `#${i + 1} ${esc(snap.teams.find((x) => x.id === t)?.name)}`).join(", ")}</div>` : "";
+  const stances = snap.fighting ? `<span class="war">At war</span>` : `Truce (no combat yet)`;
+  const r = S.game.result;
+  const res = r && S.viewIdx < 0 ? `<div class="small"><b>Final:</b> ${r.draw ? "draw" : `${esc(snap.teams.find((x) => x.id === r.winner)?.name)} wins`}</div>` : "";
   $("#scoreboard").innerHTML = `<div class="tablewrap"><table class="scores"><tr><th>Team</th><th>VP</th>${cols.map(([, l]) => `<th>${l}</th>`).join("")}<th>Sett.</th><th>Units</th><th>Techs</th></tr>${rows.join("")}</table></div><div class="stances">${stances}</div>${res}`;
 }
 
 function chanOk(ch) {
   if (S.chan === "all") return true;
-  if (S.chan === "embassy") return ch.startsWith("embassy:");
   return ch === S.chan;
 }
 function chanLabel(ch) {
   const teams = S.game.log.teams;
-  const n = (id) => teams.find((t) => t.id === id)?.name ?? id;
   if (ch === "public") return "public";
-  if (ch.startsWith("team:")) return `${n(ch.slice(5))} team`;
-  const [a, b] = ch.slice(8).split("|");
-  return `embassy ${n(a)}-${n(b)}`;
+  return `${teams.find((t) => t.id === ch.slice(5))?.name ?? ch} team`;
 }
 function renderFeed() {
   const g = S.game;
@@ -372,10 +366,10 @@ function renderAgent() {
     html += `<h4>${d.phase === "council" ? "Council" : "Orders"} phase</h4>`;
     html += block("Reasoning", d.reasoning);
     if (d.thinking) html += block("Thinking (summary)", d.thinking);
-    html += block("To team", d.team_message);
-    html += block("Public", d.public_message);
-    for (const e of d.embassy ?? []) html += block(`Embassy to ${e.team}`, e.message);
-    if (d.orders?.length) html += block("Orders", d.orders.join("\n"), "mono");
+    for (const m of d.said ?? []) html += block(m.channel === "public" ? "Said publicly" : "Said to team", m.text);
+    if (d.orders?.length) html += block("Orders submitted", d.orders.join("\n"), "mono");
+    if (d.transcript?.length)
+      html += `<details><summary class="small">Command transcript (${d.transcript.length} commands)</summary><pre class="doc">${esc(d.transcript.map((x) => `$ shard ${x.cmd}\n${x.out}`).join("\n\n"))}</pre></details>`;
     html += block("Notes", d.notes);
     if (d.error) html += block("Error", d.error);
   }
@@ -396,10 +390,16 @@ function renderLeague() {
   $("#leagueTitle").textContent = `League ${L.file.name}`;
   $("#leagueSettings").textContent = `${s.backend}${s.backend !== "mock" ? ` | ${s.model} | effort ${s.effort}` : ""} | council ${s.council ? "on" : "off"} | ${s.turns ?? 30} turns | ${L.results.length} games | ~$${L.results.reduce((a, r) => a + (r.usd || 0), 0).toFixed(2)} API-equivalent`;
   const teams = [...L.file.teams].sort((a, b) => L.ratings[b.id] - L.ratings[a.id]);
-  $("#ratingsTable").innerHTML = `<div class="tablewrap"><table class="grid"><tr><th>Team</th><th>Elo</th><th>Games</th><th>Wins</th><th>Avg place</th><th>Avg VP</th></tr>${teams.map((t) => {
+  const opp = (r, t) => r.seats.find((x) => x !== t);
+  $("#ratingsTable").innerHTML = `<div class="tablewrap"><table class="grid"><tr><th>Team</th><th>Elo</th><th>Games</th><th>W-L-D</th><th>Avg VP</th><th>Avg VP against</th></tr>${teams.map((t) => {
     const mine = L.results.filter((r) => r.seats.includes(t.id));
-    return `<tr><td><span class="sw" style="background:${teamColor(t.id)}"></span>${esc(t.name)}</td><td>${L.ratings[t.id]}</td><td>${mine.length}</td><td>${mine.filter((r) => r.ranking[0] === t.id).length}</td><td>${mine.length ? mean(mine.map((r) => r.ranking.indexOf(t.id) + 1)).toFixed(2) : "-"}</td><td>${mine.length ? mean(mine.map((r) => r.scores[t.id].total)).toFixed(1) : "-"}</td></tr>`;
-  }).join("")}</table></div>`;
+    const w = mine.filter((r) => r.winner === t.id).length, d = mine.filter((r) => r.draw).length;
+    return `<tr><td><span class="sw" style="background:${teamColor(t.id)}"></span>${esc(t.name)}</td><td>${L.ratings[t.id]}</td><td>${mine.length}</td><td>${w}-${mine.length - w - d}-${d}</td><td>${mine.length ? mean(mine.map((r) => r.scores[t.id].total)).toFixed(1) : "-"}</td><td>${mine.length ? mean(mine.map((r) => r.scores[opp(r, t.id)].total)).toFixed(1) : "-"}</td></tr>`;
+  }).join("")}</table></div>` + (L.file.teams.length > 2 ? `<h3>Head to head</h3><p class="muted small">Row team's wins-losses against column team.</p><div class="tablewrap"><table class="grid"><tr><th></th>${teams.map((t) => `<th>${esc(t.name)}</th>`).join("")}</tr>${teams.map((a) => `<tr><td><span class="sw" style="background:${teamColor(a.id)}"></span>${esc(a.name)}</td>${teams.map((b) => {
+    if (a === b) return "<td>-</td>";
+    const g = L.results.filter((r) => r.seats.includes(a.id) && r.seats.includes(b.id));
+    return `<td>${g.filter((r) => r.winner === a.id).length}-${g.filter((r) => r.winner === b.id).length}</td>`;
+  }).join("")}</tr>`).join("")}</table></div>` : "");
 
   // Elo chart
   const elo = L.file.teams.map((t) => ({
@@ -417,7 +417,7 @@ function renderLeague() {
     return `<tr><td><span class="sw" style="background:${teamColor(t.id)}"></span>${esc(t.name)}</td>${keys.map((k) => `<td>${Math.round(mean(vs.map((v) => v[k])) * 100)}%</td>`).join("")}</tr>`;
   }).join("")}</table></div>`;
 
-  $("#gamesTable").innerHTML = `<div class="tablewrap"><table class="grid"><tr><th>Game</th><th>Result</th><th>Turns</th><th>Cost</th></tr>${[...L.results].reverse().map((r) => `<tr class="click" data-game="${r.game}"><td>${r.game}</td><td style="text-align:left">${r.ranking.map((t, i) => `#${i + 1} ${esc(teamName(t))} ${r.scores[t].total}`).join(", ")}</td><td>${r.turns}</td><td>$${(r.usd || 0).toFixed(2)}</td></tr>`).join("")}</table></div><p class="small muted">Click a game to replay it in the Game tab.</p>`;
+  $("#gamesTable").innerHTML = `<div class="tablewrap"><table class="grid"><tr><th>Game</th><th>Result</th><th>Turns</th><th>Cost</th></tr>${[...L.results].reverse().map((r) => `<tr class="click" data-game="${r.game}"><td>${r.game}</td><td style="text-align:left">${esc(teamName(r.seats[0]))} ${r.scores[r.seats[0]].total} - ${r.scores[r.seats[1]].total} ${esc(teamName(r.seats[1]))}: ${r.draw ? "draw" : `<b>${esc(teamName(r.winner))}</b> wins`}</td><td>${r.turns}</td><td>$${(r.usd || 0).toFixed(2)}</td></tr>`).join("")}</table></div><p class="small muted">Click a game to replay it in the Game tab.</p>`;
   $$("#gamesTable tr.click").forEach((tr) => (tr.onclick = () => openReplay(tr.dataset.game)));
 
   $("#teamPick").innerHTML = L.file.teams.map((t) => `<button data-team="${t.id}" class="${t.id === S.team ? "active" : ""}" style="border-left:4px solid ${teamColor(t.id)}">${esc(t.name)}</button>`).join("");
