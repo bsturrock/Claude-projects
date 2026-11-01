@@ -1,7 +1,7 @@
 {
   "name": "Paired Play",
   "description": "Default. No hands. The Captain draws 2, keeps 1 and passes 1; the Second draws 1 more. Both play a card, revealed shuffled; any Breach logs a Breach.",
-  "deck": { "repair": 12, "breach": 8 },
+  "deck": { "repair": 13, "breach": 7 },
   "handSize": 0,
   "missionMode": "paired",
   "supplyCrateSize": 2,
