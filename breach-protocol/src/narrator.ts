@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { runClaude, writeSystemPrompt } from "./agents/claudecode.js";
 import type { GameSummary, Narrator, RoundSummary, Usage } from "./types.js";
 
 const ROUND_SCHEMA = {
@@ -108,5 +109,33 @@ export class MockNarrator implements Narrator {
       biggest_mistake: "-",
       players: roles.map((r) => ({ name: r.split(":")[0], verdict: r })),
     };
+  }
+}
+
+/** Narrator backed by one-shot Claude Code CLI calls (no API key; uses the logged-in account). */
+export class ClaudeCodeNarrator implements Narrator {
+  usage: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, calls: 0 };
+  private systemPromptFile: string;
+  constructor(
+    public model: string,
+    rules: string,
+  ) {
+    this.systemPromptFile = writeSystemPrompt("narrator", `${SYSTEM}\n\nRULES OF THE GAME:\n${rules}`);
+  }
+  private async call<T>(prompt: string, schema: object): Promise<T> {
+    const r = await runClaude({ prompt, systemPromptFile: this.systemPromptFile, schema, model: this.model, effort: "low" });
+    this.usage.calls++;
+    this.usage.input += r.usage.input;
+    this.usage.cacheRead += r.usage.cacheRead;
+    this.usage.cacheWrite += r.usage.cacheWrite;
+    this.usage.output += r.usage.output;
+    this.usage.usd = (this.usage.usd ?? 0) + r.costUsd;
+    return r.output as T;
+  }
+  round(log: string) {
+    return this.call<RoundSummary>(`Summarize this round.\n\nROUND LOG:\n${log}`, ROUND_SCHEMA);
+  }
+  game(log: string) {
+    return this.call<GameSummary>(`Summarize the whole game.\n\nFULL GAME LOG:\n${log}`, GAME_SCHEMA);
   }
 }

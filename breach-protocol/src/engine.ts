@@ -33,6 +33,7 @@ export interface RoundFacts {
   approved?: boolean;
   crate?: Card[];
   handed?: Card;
+  secondDrew?: Card[];
   played?: { player: number; card: Card }[];
   result?: Card;
   auto?: Card;
@@ -191,8 +192,8 @@ export class Game {
       `Round ${this.round} | Repairs ${this.repairs}/${rs.repairsToWin} | Breaches ${this.breaches}/${rs.breachesToWin} | Unrest ${this.unrest}/${rs.unrestLimit}`,
       `Captain: ${cap} | Second: ${sec} | Last approved team: ${this.lastTeam.map((i) => this.name(i)).join(" + ") || "none"}`,
       `Alive (seat order): ${alive}${dead.length ? ` | Ejected: ${dead.join(", ")}` : ""}`,
-      `Your hand: ${p.hand.join(", ")}`,
     ];
+    if (this.rs.handSize > 0) lines.push(`Your hand: ${p.hand.join(", ")}`);
     // The full public record is sent once per round per player, to keep histories compact.
     if (this.recordSeen[p.id] < this.round && this.record.length) {
       this.recordSeen[p.id] = this.round;
@@ -443,47 +444,53 @@ export class Game {
     this.phase = "mission";
     this.snapshot();
     const team = [cap, second];
-    if (this.rs.missionMode === "supply") await this.supplyCrate(cap, second, facts);
-    const plays = await Promise.all(
-      team.map((p) =>
-        this.ask(
-          p.id,
-          "play_card",
-          `MISSION. You are on the team. Your hand: ${p.hand.join(", ")}. Set "card" to the card you play ("repair" or "breach"); it must be in your hand. Leave "say" empty.`,
+    let result: Card;
+    let rec: string;
+    if (this.rs.missionMode === "split") {
+      result = await this.splitMission(cap, second, facts);
+      rec = `R${this.round}: ${cap.name} + ${second.name} APPROVED (${voteText}) -> ${second.name} played ${result.toUpperCase()}`;
+    } else {
+      if (this.rs.missionMode === "supply") await this.supplyCrate(cap, second, facts);
+      const plays = await Promise.all(
+        team.map((p) =>
+          this.ask(
+            p.id,
+            "play_card",
+            `MISSION. You are on the team. Your hand: ${p.hand.join(", ")}. Set "card" to the card you play ("repair" or "breach"); it must be in your hand. Leave "say" empty.`,
+          ),
         ),
-      ),
-    );
-    const played: Card[] = team.map((p, i) => {
-      let c = plays[i].card as Card;
-      if (!p.hand.includes(c)) {
-        c = p.hand[0];
-        this.emit("error", null, { player: p.id, text: `${p.name} chose a card not in hand; played ${c}.` });
+      );
+      const played: Card[] = team.map((p, i) => {
+        let c = plays[i].card as Card;
+        if (!p.hand.includes(c)) {
+          c = p.hand[0];
+          this.emit("error", null, { player: p.id, text: `${p.name} chose a card not in hand; played ${c}.` });
+        }
+        p.hand.splice(p.hand.indexOf(c), 1);
+        this.emit("played", [p.id], { player: p.id, card: c });
+        return c;
+      });
+      facts.played = team.map((p, i) => ({ player: p.id, card: played[i] }));
+      for (const c of played) this.discard.push(c);
+      for (const p of team) {
+        // Supply mode: a crate bigger than 2 leaves the Captain with extras, discarded at random.
+        while (p.hand.length > this.rs.handSize) {
+          const i = Math.floor(Math.random() * p.hand.length);
+          this.discard.push(p.hand.splice(i, 1)[0]);
+        }
+        this.fillHand(p);
       }
-      p.hand.splice(p.hand.indexOf(c), 1);
-      this.emit("played", [p.id], { player: p.id, card: c });
-      return c;
-    });
-    facts.played = team.map((p, i) => ({ player: p.id, card: played[i] }));
-    for (const c of played) this.discard.push(c);
-    for (const p of team) {
-      // Supply mode: a crate bigger than 2 leaves the Captain with extras, discarded at random.
-      while (p.hand.length > this.rs.handSize) {
-        const i = Math.floor(Math.random() * p.hand.length);
-        this.discard.push(p.hand.splice(i, 1)[0]);
-      }
-      this.fillHand(p);
+      const nBreach = played.filter((c) => c === "breach").length;
+      result = this.rs.resolution === "any_breach" ? (nBreach > 0 ? "breach" : "repair") : nBreach === 2 ? "breach" : "repair";
+      const shown = shuffle(played);
+      this.announce(
+        `Mission result: ${shown.map((c) => c.toUpperCase()).join(" + ")} -> ${result.toUpperCase()} logged (${nBreach} Breach card${nBreach === 1 ? "" : "s"}).`,
+        { kind: "mission", cards: shown, result },
+      );
+      for (const p of team) this.tell(p.id, `You played ${played[team.indexOf(p)]}. Your hand is now: ${p.hand.join(", ")}.`);
+      rec = `R${this.round}: ${cap.name} + ${second.name} APPROVED (${voteText}) -> ${result.toUpperCase()} (${nBreach} Breach card${nBreach === 1 ? "" : "s"})`;
     }
-    const nBreach = played.filter((c) => c === "breach").length;
-    const result: Card =
-      this.rs.resolution === "any_breach" ? (nBreach > 0 ? "breach" : "repair") : nBreach === 2 ? "breach" : "repair";
     facts.result = result;
-    const shown = shuffle(played);
-    this.announce(
-      `Mission result: ${shown.map((c) => c.toUpperCase()).join(" + ")} -> ${result.toUpperCase()} logged (${nBreach} Breach card${nBreach === 1 ? "" : "s"}).`,
-      { kind: "mission", cards: shown, result },
-    );
-    for (const p of team) this.tell(p.id, `You played ${played[team.indexOf(p)]}. Your hand is now: ${p.hand.join(", ")}.`);
-    let rec = `R${this.round}: ${cap.name} + ${second.name} APPROVED (${voteText}) -> ${result.toUpperCase()} (${nBreach} Breach card${nBreach === 1 ? "" : "s"})`;
     const power = this.log(result, true);
     this.snapshot();
     if (this.winner) {
@@ -499,7 +506,11 @@ export class Game {
       const d = await this.ask(
         p.id,
         "debrief",
-        this.rs.missionMode === "supply"
+        this.rs.missionMode === "split"
+          ? p === cap
+            ? `DEBRIEF. Make your public statement as Captain: what was in the crate and which card you passed to ${second.name}. You may lie.`
+            : `DEBRIEF. Make your public statement as Second: what ${cap.name} passed you, what you drew, and why you played what you played. You may lie.`
+          : this.rs.missionMode === "supply"
           ? `DEBRIEF. Make your public statement about the mission. Captain: what was in the crate, what you handed over and what you played. Second: what you received and what you played. You may lie.`
           : `DEBRIEF. Make your public statement about the mission (what you held / played, what you think happened). You may lie.`,
       );
@@ -514,6 +525,55 @@ export class Game {
     this.record.push(rec);
     this.current = {};
     this.snapshot();
+  }
+
+  /** Split Crate: Captain passes one of N crate cards; the Second adds their own draw and plays one. */
+  private async splitMission(cap: Player, second: Player, facts: RoundFacts): Promise<Card> {
+    const crate = Array.from({ length: this.rs.splitCaptainDraw ?? 2 }, () => this.draw());
+    facts.crate = [...crate];
+    this.announce(`${cap.name} opens a crate of ${crate.length} card${crate.length === 1 ? "" : "s"}.`, { kind: "crate" });
+    this.tell(cap.id, `Crate contents: ${crate.join(", ")}.`);
+    let give: Card = crate[0];
+    if (new Set(crate).size > 1) {
+      const d = await this.ask(
+        cap.id,
+        "supply",
+        `SPLIT CRATE. The crate holds: ${crate.join(", ")}. Choose ONE card to pass secretly to ${second.name} by setting "card". The rest are discarded face down. Leave "say" empty.`,
+      );
+      if (d.card === "repair" || d.card === "breach") give = d.card;
+    }
+    crate.splice(crate.indexOf(give), 1);
+    this.discard.push(...crate);
+    facts.handed = give;
+    this.tell(cap.id, `You passed ${second.name} a ${give}${crate.length ? ` and discarded ${crate.join(", ")}` : ""}.`);
+    const own = Array.from({ length: this.rs.splitSecondDraw ?? 1 }, () => this.draw());
+    facts.secondDrew = [...own];
+    second.hand = [give, ...own];
+    this.announce(`${cap.name} passes one card to ${second.name}, who draws ${own.length} more.`);
+    this.tell(second.id, `${cap.name} passed you a ${give}.${own.length ? ` You drew: ${own.join(", ")}.` : ""} You now hold: ${second.hand.join(", ")}.`);
+    this.snapshot();
+
+    const d = await this.ask(
+      second.id,
+      "play_card",
+      `MISSION. You hold: ${second.hand.join(", ")} (${give} was passed by ${cap.name}${own.length ? `, you drew ${own.join(", ")}` : ""}). Play ONE by setting "card" ("repair" or "breach"); the rest are discarded face down. Leave "say" empty.`,
+    );
+    let card = d.card as Card;
+    if (!second.hand.includes(card)) {
+      card = second.hand[0];
+      this.emit("error", null, { player: second.id, text: `${second.name} chose a card they don't hold; played ${card}.` });
+    }
+    second.hand.splice(second.hand.indexOf(card), 1);
+    this.discard.push(card, ...second.hand);
+    second.hand = [];
+    this.emit("played", [second.id], { player: second.id, card });
+    facts.played = [{ player: second.id, card }];
+    this.announce(`Mission result: ${second.name} plays ${card.toUpperCase()}. ${card.toUpperCase()} logged.`, {
+      kind: "mission",
+      cards: [card],
+      result: card,
+    });
+    return card;
   }
 
   /** Captain draws the crate and secretly hands one card to the Second. */

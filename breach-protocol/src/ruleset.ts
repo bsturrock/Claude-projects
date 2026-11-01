@@ -16,9 +16,14 @@ export interface Ruleset {
    * "simultaneous": Captain and Second each play one card from their hand, then refill.
    * "supply": Captain draws N crate cards, secretly hands one to the Second and keeps the rest;
    *           then both play one card from their hand (no refill needed).
+   * "split":  No hands. Captain draws splitCaptainDraw cards and secretly passes one to the Second
+   *           (the rest are discarded face down). The Second draws splitSecondDraw more, then plays
+   *           ONE of the cards they hold; that card is logged.
    */
-  missionMode: "simultaneous" | "supply";
+  missionMode: "simultaneous" | "supply" | "split";
   supplyCrateSize: number;
+  splitCaptainDraw?: number;
+  splitSecondDraw?: number;
   /** "any_breach": one Breach card logs a Breach. "both_breach": both cards must be Breach. */
   resolution: "any_breach" | "both_breach";
   repairsToWin: number;
@@ -60,8 +65,16 @@ function validate(rs: Ruleset, id: string) {
     throw new Error(`ruleset ${id}: ${m}`);
   };
   const total = rs.deck.repair + rs.deck.breach;
-  if (rs.handSize < 1) fail("handSize must be >= 1");
-  if (total < 8 * rs.handSize + rs.supplyCrateSize + 2) fail("deck too small for 8 players");
+  if (rs.missionMode === "split") {
+    rs.splitCaptainDraw ??= 2;
+    rs.splitSecondDraw ??= 1;
+    if (rs.splitCaptainDraw < 1 || rs.splitSecondDraw < 0) fail("split draws must be >= 1 (captain) and >= 0 (second)");
+    if (rs.splitSecondDraw === 0 && rs.splitCaptainDraw < 2) fail("the Second needs at least 2 cards to choose from");
+    if (total < 8 * rs.handSize + rs.splitCaptainDraw + rs.splitSecondDraw + 2) fail("deck too small for 8 players");
+  } else {
+    if (rs.handSize < 1) fail("handSize must be >= 1 unless missionMode is split");
+    if (total < 8 * rs.handSize + rs.supplyCrateSize + 2) fail("deck too small for 8 players");
+  }
   if (rs.missionMode === "supply" && rs.supplyCrateSize < 2) fail("supplyCrateSize must be >= 2");
   for (const n of ["5", "6", "7", "8"]) if (rs.saboteurs[n] === undefined) fail(`saboteurs missing count for ${n}`);
 }
@@ -86,8 +99,14 @@ export function rulesText(rs: Ruleset): string {
     rs.resolution === "any_breach"
       ? "If EITHER card is a Breach, a Breach is logged. Only two Repairs log a Repair."
       : "Only if BOTH cards are Breach is a Breach logged. Otherwise a Repair is logged.";
+  const split = `4. Mission (Split Crate). Nobody holds cards between missions.
+   a. The Captain privately draws ${rs.splitCaptainDraw} card(s) (the "crate"), secretly passes ONE to the Second, and discards the rest face down. Only the Captain knows the crate.
+   b. The Second privately draws ${rs.splitSecondDraw} more card(s), then secretly plays ONE of the ${(rs.splitSecondDraw ?? 0) + 1} cards they hold; the rest are discarded face down. Only the Second knows what they were passed and drew.
+   c. The played card is revealed and logged (Repair or Breach). Everyone knows the Second chose it, but not what the Second had to choose from or what the Captain passed.`;
   const mission =
-    rs.missionMode === "supply"
+    rs.missionMode === "split"
+      ? split
+      : rs.missionMode === "supply"
       ? `4. Mission (Supply Crate):
    a. The Captain privately draws ${rs.supplyCrateSize} cards from the deck (the "crate").
    b. The Captain secretly hands ONE crate card to the Second and keeps the rest in their own hand. Only the Captain knows the crate; only the Second knows what they received.
@@ -110,17 +129,22 @@ TEAMS
 - Saboteurs. Win by logging ${rs.breachesToWin} Breaches${rs.infiltratorDangerAt > 0 ? `, OR if the Infiltrator is approved onto a mission team (as Captain or Second) once ${rs.infiltratorDangerAt}+ Breaches are logged` : ""}.
 - The Infiltrator is on the Saboteur team. Regular Saboteurs know each other and know who the Infiltrator is. The Infiltrator does NOT know who the Saboteurs are.
 
-CARDS AND HANDS
+${
+    rs.missionMode === "split"
+      ? `CARDS
+- Shared deck: ${rs.deck.repair} Repair and ${rs.deck.breach} Breach cards. Players do not hold hands. Used and discarded cards go to a discard pile, which is reshuffled into the deck when it runs out.
+- Because draws are random, an honest Captain or Second can be left with only Breach cards. Saboteurs can also choose Repair to look innocent.`
+      : `CARDS AND HANDS
 - Shared deck: ${rs.deck.repair} Repair and ${rs.deck.breach} Breach cards. Every player privately holds ${rs.handSize} cards. Played cards go to a discard pile, which is reshuffled into the deck when it runs out.
-- Because hands are random, an honest Crew member can be stuck holding only Breach cards. Saboteurs can also choose to play Repair to look innocent.
+- Because hands are random, an honest Crew member can be stuck holding only Breach cards. Saboteurs can also choose to play Repair to look innocent.`
+  }
 
 ROUND STRUCTURE
 1. Briefing: open discussion. Anyone may speak, accuse, defend, or stay quiet.
 2. Nomination: the Captain (rotates around the table each round) nominates one other living player as Second. ${term}
 3. Debate on the nomination, then everyone alive votes YES or NO simultaneously. Votes are revealed. Strict majority YES approves the team.
    - If rejected: Unrest rises by 1. At ${rs.unrestLimit} Unrest, the top card of the deck is logged automatically (no powers trigger), Unrest resets, and nomination restrictions clear.
-${mission}
-   Everyone sees how many Breach cards were played (0, 1 or 2).
+${mission}${rs.missionMode === "split" ? "" : "\n   Everyone sees how many Breach cards were played (0, 1 or 2)."}
 5. Debrief: Captain and Second each make a public statement (they may lie).
 6. Powers (used by the Captain who just ran the mission). SCAN = privately learn one player's team (the Infiltrator shows as Saboteur; the Captain may share or lie about it). EJECT = remove one player from the game (role not revealed unless they were the Infiltrator).
 ${powersText(rs)}
@@ -128,5 +152,5 @@ ${powersText(rs)}
 TALK
 - All conversation is public. You may lie, bluff, or claim anything. Ejected players cannot speak or vote.
 - Refer to players by name. Keep each message under 70 words. Stay in character as a station crew member; this is a game of deduction and persuasion.
-- Good play: track every claim (hands, crate contents, cards received, scan results) and look for claims that cannot all be true. Compare them with the public mission and vote record you are given each turn.`;
+- Good play: track every claim (crate contents, cards passed, received and drawn, scan results) and look for claims that cannot all be true. Compare them with the public mission and vote record you are given each turn.`;
 }

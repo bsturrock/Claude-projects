@@ -19,12 +19,18 @@
         </select>
       </label>
       <label>Agents
+        <select id="backend">
+          <option value="claude-code">Claude Code sessions (your login)</option>
+          <option value="api">Anthropic API (API key)</option>
+          <option value="mock">Mock bots (offline)</option>
+        </select>
+      </label>
+      <label>Model
         <select id="model">
-          <option value="claude-opus-5-5">All Opus 5.5</option>
-          <option value="claude-sonnet-5-5">All Sonnet 5.5</option>
-          <option value="claude-haiku-5-5">All Haiku 5.5</option>
-          <option value="mixed">Mixed (Opus / Sonnet / Haiku)</option>
-          <option value="mock">Mock bots (no API)</option>
+          <option value="claude-opus-5-5">Opus 5.5</option>
+          <option value="claude-sonnet-5-5">Sonnet 5.5</option>
+          <option value="claude-haiku-5-5" selected>Haiku 5.5</option>
+          <option value="mixed">Mixed</option>
         </select>
       </label>
       <label>Rules
@@ -70,7 +76,7 @@
           <div><span class="k">Phase</span> <span id="phase">-</span></div>
           <div><span class="k">Unrest</span> <span id="unrest" class="pips"></span></div>
           <div><span class="k">Deck</span> <span id="deck">-</span> <span class="k">Discard</span> <span id="discard">-</span></div>
-          <div><span class="k">Spend</span> <span id="cost">$0.00</span></div>
+          <div><span class="k" id="costLabel">Spend</span> <span id="cost">$0.00</span></div>
         </div>
       </div>
 

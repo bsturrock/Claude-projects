@@ -7,16 +7,30 @@ An original hidden-role social deduction game played entirely by Claude agents, 
 ```bash
 cd breach-protocol
 npm install
-export ANTHROPIC_API_KEY=sk-ant-...   # not needed for mock bots
-npm start                              # http://localhost:3000
+npm start          # http://localhost:3000
 ```
 
-Pick player count (5-8), agent model, ruleset, and effort, then press **New game**.
+Pick player count (5-8), agents, model, ruleset, and effort, then press **New game**.
+
+### Agent backends
+
+| Backend | How it works | Needs |
+|---|---|---|
+| **Claude Code sessions** (default) | Each player is its own persistent headless Claude Code session (`claude -p`, resumed every turn). It uses whatever account `claude` is logged in as, e.g. your Pro or Max subscription. | Claude Code installed and logged in on the machine running the server |
+| Anthropic API | Each player is a Messages API conversation. | `ANTHROPIC_API_KEY` |
+| Mock bots | Offline heuristic bots, for testing and UI demos. | Nothing |
+
+Notes on the Claude Code backend:
+- The server removes `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from the child processes so they always use your login (set `BREACH_CLI_USE_API_KEY=1` to opt out).
+- Sessions run in a scratch directory (`$TMPDIR/breach-protocol-agents`) with no tools, no settings sources, no MCP servers and no slash commands, so your projects, hooks and CLAUDE.md files don't leak in.
+- Games count toward your plan's usage limits. A 5-player game is a few hundred calls; Haiku is the lightest. The board shows the API-equivalent cost Claude Code reports, which is not billed on a subscription.
+- At most 4 `claude` processes run at once (`BREACH_MAX_PARALLEL`). Each decision is a new process that resumes the session, so expect a few seconds per turn.
+- Claude Code doesn't return thinking summaries in this mode, so the Agents tab shows each agent's stated reasoning and actions.
 
 Other commands:
 
 - `npm run sim` plays 200 mock games per ruleset and checks rule invariants (card conservation, hand sizes, track limits, one recap per round plus a game recap).
-- `npm run sim -- --claude supply-crate` plays one Claude game in the terminal and prints the game summary.
+- `BREACH_MODEL=claude-haiku-5-5 npm run sim -- --claude split-crate` plays one game with Claude Code agents in the terminal and prints the game summary.
 - Every finished game is saved to `logs/game-<timestamp>.json` and can be replayed in the UI.
 
 ## Spectator UI
@@ -32,7 +46,7 @@ Other commands:
 
 About "chain of thought": the API never returns a model's raw reasoning. The Agents tab shows the *summarized* thinking the API returns (`thinking.display: "summarized"`) plus the short reasoning each agent writes in its JSON answer.
 
-## Rules (default ruleset: Supply Crate)
+## Rules (default ruleset: Split Crate)
 
 **Teams.** Crew (majority) vs. Saboteurs. One Saboteur is the **Infiltrator**. Regular Saboteurs know each other and the Infiltrator; the Infiltrator knows nobody.
 
@@ -47,14 +61,14 @@ About "chain of thought": the API never returns a model's raw reasoning. The Age
 - Crew: log 5 Repairs, or eject the Infiltrator.
 - Saboteurs: log 5 Breaches, or get the Infiltrator approved onto a mission team once 3+ Breaches are logged.
 
-**Cards.** 12 Repair and 8 Breach. Everyone privately holds 2 cards.
+**Cards.** 12 Repair and 8 Breach in a shared deck. Nobody holds cards between missions.
 
 **Each round.**
 1. **Briefing**: open talk. Agents choose whether to speak; anyone named in a message gets to respond next.
 2. **Nomination**: the Captain (rotates) picks a Second. The last approved team is barred (with 5 or fewer alive, only the last Second).
 3. **Debate**, then a simultaneous **vote**. Strict majority approves. A rejection adds 1 Unrest; at 3 the top deck card is logged automatically, with no powers.
-4. **Mission (Supply Crate)**: the Captain privately draws 2 cards, secretly hands one to the Second and keeps the other. Both then secretly play one card from their 3-card hands. The cards are revealed shuffled. Any Breach logs a Breach; only two Repairs log a Repair.
-5. **Debrief**: the Captain claims what was in the crate and what they handed over; the Second claims what they received. Both may lie, and their claims can contradict.
+4. **Mission (Split Crate)**: the Captain privately draws 2 cards, secretly passes one to the Second and discards the other face down. The Second draws 1 more card, then plays one of the 2 cards they hold; the other is discarded face down. The played card is logged.
+5. **Debrief**: the Captain claims what was in the crate and what they passed; the Second claims what they were passed and what they drew. Both may lie, and their claims can contradict.
 6. **Powers** for that Captain: 2nd Breach = Scan (privately learn a player's team), 3rd and 4th Breach = Eject, 3rd Repair = Scan.
 
 ## Rulesets
@@ -64,10 +78,11 @@ Rules live in `rulesets/*.json`. The engine, the rules text each agent receives,
 | Field | Meaning |
 |---|---|
 | `deck.repair`, `deck.breach` | Deck composition |
-| `handSize` | Cards each player holds |
-| `missionMode` | `"supply"` (crate hand-off) or `"simultaneous"` (play from own hand, refill) |
+| `handSize` | Cards each player holds between missions (0 in split mode) |
+| `missionMode` | `"split"` (no hands; Captain passes one crate card, Second adds a draw and plays one), `"supply"` (crate hand-off, both play from hands), or `"simultaneous"` (both play from own hand, refill) |
+| `splitCaptainDraw`, `splitSecondDraw` | Cards the Captain and Second draw in split mode |
 | `supplyCrateSize` | Crate size in supply mode (extras beyond hand size are discarded at random) |
-| `resolution` | `"any_breach"` or `"both_breach"` |
+| `resolution` | `"any_breach"` or `"both_breach"` (two-card modes only) |
 | `repairsToWin`, `breachesToWin`, `unrestLimit` | Track lengths |
 | `infiltratorDangerAt` | Breaches after which an approved Infiltrator wins (0 disables) |
 | `breachPowers`, `repairPowers` | Map of track count to `"scan"` or `"eject"` |
@@ -76,7 +91,7 @@ Rules live in `rulesets/*.json`. The engine, the rules text each agent receives,
 | `discussion` | Max messages per player in briefing and debate |
 | `maxRounds` | Safety cap |
 
-Included: `supply-crate.json` (default) and `simultaneous.json` (the first version, no crate).
+Included: `split-crate.json` (default, no hands), `supply-crate.json` (hands + crate hand-off), and `simultaneous.json` (the first version).
 
 ## Architecture
 
@@ -86,6 +101,7 @@ src/
   ruleset.ts        Ruleset type, loader/validator, and rules-text generator
   rules.ts          Player names and personas
   narrator.ts       Narrator agent (round + game recaps) and a template narrator for mock games
+  agents/claudecode.ts  One Claude player = one persistent headless Claude Code session
   agents/claude.ts  One Claude player = one isolated Messages API conversation
   agents/mock.ts    Heuristic bots for offline testing / UI demo
   setup.ts          Role dealing, model assignment, cost estimate

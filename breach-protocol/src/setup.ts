@@ -1,8 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ClaudeAgent, buildSystemPrompt, type Effort } from "./agents/claude.js";
+import { ClaudeCodeAgent } from "./agents/claudecode.js";
 import { MockAgent } from "./agents/mock.js";
 import { shuffle } from "./engine.js";
-import { ClaudeNarrator, MockNarrator } from "./narrator.js";
+import { ClaudeCodeNarrator, ClaudeNarrator, MockNarrator } from "./narrator.js";
 import { NAMES, PERSONAS } from "./rules.js";
 import { loadRuleset, rolesFor, rulesText, type Ruleset } from "./ruleset.js";
 import type { Agent, Narrator, Player, Usage } from "./types.js";
@@ -17,14 +18,19 @@ const PRICES: Record<string, [number, number, number, number]> = {
 };
 
 export function costOf(model: string, u: Usage): number {
+  if (u.usd !== undefined) return u.usd;
   const p = PRICES[model];
   if (!p) return 0;
   return (u.input * p[0] + u.cacheWrite * p[1] + u.cacheRead * p[2] + u.output * p[3]) / 1e6;
 }
 
+export type Backend = "claude-code" | "api" | "mock";
+
 export interface GameConfig {
   numPlayers: number;
-  /** One model for everyone, "mixed" (rotate through MODELS), or "mock". */
+  /** "claude-code": each player is a headless Claude Code session (your login, no API key). "api": Messages API. "mock": offline bots. */
+  backend: Backend;
+  /** One model for everyone, or "mixed" (rotate through MODELS). Ignored for mock. */
   model: string;
   effort: Effort;
   /** File name (without .json) in /rulesets. */
@@ -46,15 +52,21 @@ export function createGameParts(cfg: GameConfig): { rules: Ruleset; players: Pla
     role,
     alive: true,
     hand: [],
-    model: cfg.model === "mock" ? "mock" : cfg.model === "mixed" ? MODELS[id % MODELS.length] : cfg.model,
+    model: cfg.backend === "mock" ? "mock" : cfg.model === "mixed" ? MODELS[id % MODELS.length] : cfg.model,
   }));
-  const client = cfg.model === "mock" ? null : new Anthropic({ maxRetries: 4 });
-  const agents: Agent[] = players.map((p) =>
-    client ? new ClaudeAgent(client, p.model, buildSystemPrompt(text, p.name, p.persona), cfg.effort) : new MockAgent(p, players),
-  );
+  const narratorModel = cfg.model === "mixed" ? MODELS[0] : cfg.model;
+  let agents: Agent[];
   let narrator: Narrator | undefined;
-  if (cfg.narrator) {
-    narrator = client ? new ClaudeNarrator(client, cfg.model === "mixed" ? MODELS[0] : cfg.model, text) : new MockNarrator();
+  if (cfg.backend === "api") {
+    const client = new Anthropic({ maxRetries: 4 });
+    agents = players.map((p) => new ClaudeAgent(client, p.model, buildSystemPrompt(text, p.name, p.persona), cfg.effort));
+    if (cfg.narrator) narrator = new ClaudeNarrator(client, narratorModel, text);
+  } else if (cfg.backend === "claude-code") {
+    agents = players.map((p) => new ClaudeCodeAgent(p.model, buildSystemPrompt(text, p.name, p.persona), cfg.effort, p.name));
+    if (cfg.narrator) narrator = new ClaudeCodeNarrator(narratorModel, text);
+  } else {
+    agents = players.map((p) => new MockAgent(p, players));
+    if (cfg.narrator) narrator = new MockNarrator();
   }
   return { rules, players, agents, narrator };
 }

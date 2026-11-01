@@ -1,7 +1,7 @@
 /**
  * Headless runner. Plays games with mock agents (default) and checks rule invariants.
  *   npm run sim                         -> 200 mock games per ruleset, prints win rates
- *   npm run sim -- --claude [ruleset]   -> one game with Claude agents, printed to the terminal
+ *   npm run sim -- --claude [ruleset]   -> one game with Claude Code agents (BREACH_MODEL, default Haiku), printed to the terminal
  */
 import { Game } from "./engine.js";
 import { MockAgent } from "./agents/mock.js";
@@ -20,10 +20,11 @@ for (const ruleset of rulesets) {
   const tally: Record<string, number> = {};
   let rounds = 0;
   for (let g = 0; g < gamesPer; g++) {
-    const n = 5 + (g % 4);
+    const n = claude ? Number(process.env.BREACH_PLAYERS ?? 5) : 5 + (g % 4);
     const { rules, players, agents, narrator } = createGameParts({
       numPlayers: n,
-      model: claude ? "claude-opus-5-5" : "mock",
+      backend: claude ? "claude-code" : "mock",
+      model: process.env.BREACH_MODEL ?? "claude-haiku-5-5",
       effort: "medium",
       ruleset,
       narrator: true,
@@ -51,9 +52,13 @@ for (const ruleset of rulesets) {
           if (cards !== deckTotal) throw new Error(`card conservation broken: ${cards}/${deckTotal}`);
           if (s.repairs > rules.repairsToWin || s.breaches > rules.breachesToWin || s.unrest > rules.unrestLimit)
             throw new Error("track overflow");
-          const maxHand = rules.handSize + (rules.missionMode === "supply" ? rules.supplyCrateSize - 1 : 0);
+          const minHand = rules.handSize;
+          const maxHand =
+            rules.missionMode === "split"
+              ? 1 + (rules.splitSecondDraw ?? 1)
+              : rules.handSize + (rules.missionMode === "supply" ? rules.supplyCrateSize - 1 : 0);
           for (const p of s.players)
-            if (p.hand.length < rules.handSize || p.hand.length > maxHand) throw new Error(`hand size ${p.hand.length} at snapshot`);
+            if (p.hand.length < minHand || p.hand.length > maxHand) throw new Error(`hand size ${p.hand.length} at snapshot`);
         }
       },
     });

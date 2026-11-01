@@ -27,6 +27,7 @@ $("controls").addEventListener("submit", async (e) => {
     method: "POST",
     body: JSON.stringify({
       numPlayers: +$("numPlayers").value,
+      backend: $("backend").value,
       model: $("model").value,
       effort: $("effort").value,
       ruleset: $("ruleset").value,
@@ -38,6 +39,7 @@ $("pause").onclick = async () => {
   const paused = $("pause").dataset.paused === "1";
   await fetch(paused ? "/api/resume" : "/api/pause", { method: "POST" });
 };
+$("backend").onchange = () => ($("model").disabled = $("backend").value === "mock");
 $("stop").onclick = () => fetch("/api/stop", { method: "POST" });
 $("reveal").onchange = () => {
   document.body.classList.toggle("reveal", $("reveal").checked);
@@ -56,9 +58,12 @@ $("live").onclick = goLive;
 
 async function loadConfig() {
   const c = await (await fetch("/api/config")).json();
-  if (!c.hasKey) $("model").value = "mock";
+  $("backend").value = c.cli?.ok ? "claude-code" : c.hasKey ? "api" : "mock";
+  if (!c.cli?.ok) $("backend").querySelector('[value="claude-code"]').textContent += " (claude CLI not found)";
+  if (!c.hasKey) $("backend").querySelector('[value="api"]').textContent += " (no key set)";
+  $("model").disabled = $("backend").value === "mock";
   $("ruleset").innerHTML = c.rulesets.map((r) => `<option value="${esc(r.id)}" title="${esc(r.description)}">${esc(r.name)}</option>`).join("");
-  if (c.rulesets.some((r) => r.id === "supply-crate")) $("ruleset").value = "supply-crate";
+  if (c.rulesets.some((r) => r.id === "split-crate")) $("ruleset").value = "split-crate";
   await loadLogs();
 }
 async function loadLogs() {
@@ -144,6 +149,9 @@ function renderTracks() {
   $("discard").textContent = state.discard;
   $("unrest").innerHTML = Array.from({ length: rules.unrestLimit }, (_, i) => `<span class="pip ${i < state.unrest ? "on" : ""}"></span>`).join("");
   if (state.usd !== undefined) $("cost").textContent = `$${state.usd.toFixed(2)}`;
+  const cc = state.players?.some((p) => p.usage?.usd !== undefined);
+  $("costLabel").textContent = cc ? "API-equiv" : "Spend";
+  $("costLabel").title = cc ? "Claude Code reports what these calls would cost on the API. On a Pro/Max login this is not billed; it counts toward your plan's usage limits." : "";
   const phaseNames = { briefing: "Briefing", nomination: "Nomination", debate: "Debate", vote: "Voting", mission: "Mission", debrief: "Debrief", scan: "Power: Scan", eject: "Power: Eject", over: "Game over", setup: "Setup" };
   $("centerPhase").textContent = `${state.ruleset} . Round ${state.round || 0} . ${phaseNames[state.phase] ?? state.phase}`;
 }
@@ -282,7 +290,7 @@ function renderRound(r) {
     f.power ? `Power: ${esc(f.power.kind)} on ${esc(name(f.power.target))}` : "",
   ].filter(Boolean);
   const secret = [
-    f.crate ? `Crate: ${f.crate.map(cap).join(" + ")}; handed ${cap(f.handed)}` : "",
+    f.crate ? `Crate: ${f.crate.map(cap).join(" + ")}; passed ${cap(f.handed)}${f.secondDrew?.length ? `; Second drew ${f.secondDrew.map(cap).join(" + ")}` : ""}` : "",
     f.played ? `Played: ${f.played.map((p) => `${esc(name(p.player))} ${cap(p.card)}`).join(", ")}` : "",
   ].filter(Boolean);
   card.innerHTML = `

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Game } from "./engine.js";
 import { MockAgent } from "./agents/mock.js";
+import { claudeCliAvailable } from "./agents/claudecode.js";
 import { listRulesets } from "./ruleset.js";
 import { MODELS, costOf, createGameParts, type GameConfig } from "./setup.js";
 import type { UiEvent, Usage } from "./types.js";
@@ -12,6 +13,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(here, "..", "public");
 const logsDir = path.join(here, "..", "logs");
 const PORT = Number(process.env.PORT ?? 3000);
+const cli = claudeCliAvailable();
 
 let events: UiEvent[] = [];
 let seq = 0;
@@ -60,8 +62,8 @@ async function startGame(cfg: GameConfig) {
     return;
   }
   const { rules, players, agents, narrator } = parts;
-  MockAgent.delayMs = cfg.model === "mock" ? 250 : 0;
-  const g = new Game({ rules, players, agents, narrator, emit: push, gate, paceMs: cfg.model === "mock" ? 500 : 0 });
+  MockAgent.delayMs = cfg.backend === "mock" ? 250 : 0;
+  const g = new Game({ rules, players, agents, narrator, emit: push, gate, paceMs: cfg.backend === "mock" ? 500 : 0 });
   game = g;
   push({ type: "players", to: null, players: players.map((p) => ({ id: p.id, name: p.name, model: p.model, persona: p.persona })) });
   try {
@@ -106,6 +108,7 @@ createServer(async (req, res) => {
       models: MODELS,
       rulesets: listRulesets(),
       hasKey: Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
+      cli,
     });
   }
   if (req.method === "POST" && url.pathname.startsWith("/api/")) {
@@ -115,9 +118,10 @@ createServer(async (req, res) => {
     if (url.pathname === "/api/start") {
       const cfg: GameConfig = {
         numPlayers: Number(data.numPlayers ?? 7),
+        backend: (["claude-code", "api", "mock"].includes(data.backend) ? data.backend : "claude-code") as GameConfig["backend"],
         model: String(data.model ?? "claude-opus-5-5"),
         effort: data.effort ?? "medium",
-        ruleset: String(data.ruleset ?? "supply-crate"),
+        ruleset: String(data.ruleset ?? "split-crate"),
         narrator: data.narrator !== false,
       };
       void startGame(cfg);
@@ -150,7 +154,7 @@ createServer(async (req, res) => {
     const list = files.slice(0, 50).map((f) => {
       try {
         const d = JSON.parse(readFileSync(path.join(logsDir, f), "utf8"));
-        return { file: f, winner: d.winner, model: d.config?.model, players: d.config?.numPlayers, ruleset: d.ruleset?.name };
+        return { file: f, winner: d.winner, backend: d.config?.backend, model: d.config?.backend === "mock" ? "mock" : d.config?.model, players: d.config?.numPlayers, ruleset: d.ruleset?.name };
       } catch {
         return { file: f };
       }
@@ -170,4 +174,7 @@ createServer(async (req, res) => {
   }
   res.writeHead(200, { "content-type": TYPES[path.extname(full)] ?? "application/octet-stream" });
   res.end(buf);
-}).listen(PORT, () => console.log(`Breach Protocol spectator UI: http://localhost:${PORT}`));
+}).listen(PORT, () => {
+  console.log(`Breach Protocol spectator UI: http://localhost:${PORT}`);
+  console.log(cli.ok ? `Claude Code CLI found (${cli.version}); players will use your Claude login.` : `Claude Code CLI not found on PATH; only API and mock backends will work.`);
+});

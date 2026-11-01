@@ -48,6 +48,8 @@ export interface Usage {
   cacheWrite: number;
   output: number;
   calls: number;
+  /** Cost reported by the backend itself (Claude Code CLI). API-equivalent; not billed on a subscription. */
+  usd?: number;
 }
 
 export interface Agent {
