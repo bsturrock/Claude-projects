@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clip Review</title>
+<style>
+:root {
+  --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --line: #2a2f3a;
+  --text: #e8eaf0; --muted: #9aa3b2; --accent: #ffd400; --accent-ink: #1a1500;
+  --ok: #37d67a; --bad: #ff5d6c; --warn: #ffb547; --clip: rgba(255, 212, 0, .16);
+  --radius: 10px;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 11px; cursor: pointer; white-space: nowrap;
+}
+button:hover { border-color: #3a4150; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button.ok { border-color: var(--ok); color: var(--ok); }
+button.bad { border-color: var(--bad); color: var(--bad); }
+button.on.ok { background: var(--ok); color: #04210f; }
+button.on.bad { background: var(--bad); color: #2a0006; }
+button:disabled { opacity: .45; cursor: default; }
+input, select, textarea {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; width: 100%;
+}
+textarea { resize: vertical; min-height: 70px; line-height: 1.45; }
+label { display: block; color: var(--muted); font-size: 12px; margin: 10px 0 4px; }
+
+header {
+  position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center;
+  padding: 10px 16px; background: rgba(15,17,21,.92); backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--line);
+}
+header h1 { font-size: 15px; margin: 0; font-weight: 650; }
+header .src { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr) 380px; gap: 14px; padding: 14px 16px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+
+/* clip list */
+.list { display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 90px); overflow: auto; position: sticky; top: 64px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 9px; padding: 9px 10px; cursor: pointer; }
+.card.sel { border-color: var(--accent); }
+.card.approved { border-left-color: var(--ok); }
+.card.rejected { border-left-color: var(--bad); opacity: .55; }
+.card .t { font-weight: 600; line-height: 1.3; }
+.card .m { color: var(--muted); font-size: 12px; margin-top: 4px; display: flex; gap: 8px; flex-wrap: wrap; }
+.chip { font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+.chip.warn { color: var(--warn); border-color: var(--warn); }
+.chip.ok { color: var(--ok); border-color: var(--ok); }
+.chip.run { color: var(--accent); border-color: var(--accent); }
+
+/* editor */
+video.src { width: 100%; border-radius: 8px; background: #000; aspect-ratio: 16/9; }
+.timeline { position: relative; height: 34px; margin: 10px 0 4px; background: var(--panel-2); border-radius: 6px; cursor: pointer; overflow: hidden; }
+.timeline .range { position: absolute; top: 0; bottom: 0; background: var(--clip); border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+.timeline .head { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; }
+.timeline .lbl { position: absolute; bottom: 2px; font-size: 10px; color: var(--muted); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.trim { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+.trim .row input { width: 92px; }
+.dur { color: var(--muted); }
+.dur.bad { color: var(--warn); }
+.words { line-height: 1.9; max-height: 220px; overflow: auto; padding: 8px; background: var(--bg); border-radius: 8px; border: 1px solid var(--line); }
+.words span { cursor: pointer; padding: 1px 2px; border-radius: 4px; color: var(--muted); }
+.words span.in { color: var(--text); }
+.words span.now { background: var(--accent); color: var(--accent-ink); }
+.words span:hover { outline: 1px solid var(--line); }
+.hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.styles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.styles button { padding: 8px 6px; text-align: center; }
+.styles button.on { border-color: var(--accent); color: var(--accent); }
+.styledesc { color: var(--muted); font-size: 12px; margin-top: 6px; min-height: 32px; }
+.why { color: var(--muted); font-size: 12px; font-style: italic; margin-top: 8px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+.sec { margin-top: 14px; }
+
+/* output */
+.out video { width: 100%; max-height: 62vh; aspect-ratio: 9/16; background: #000; border-radius: 8px; display: block; margin: 0 auto; }
+.empty { color: var(--muted); text-align: center; padding: 40px 10px; border: 1px dashed var(--line); border-radius: 8px; }
+.tabs { display: flex; gap: 4px; margin: 12px 0 8px; flex-wrap: wrap; }
+.tabs button.on { border-color: var(--accent); color: var(--accent); }
+.count { color: var(--muted); font-size: 11px; text-align: right; }
+.count.over { color: var(--bad); }
+.err { color: var(--bad); font-size: 12px; white-space: pre-wrap; margin-top: 6px; }
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--line); padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast.show { opacity: 1; }
+
+@media (max-width: 1200px) {
+  .layout { grid-template-columns: 260px minmax(0, 1fr); }
+  .outcol { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .layout { grid-template-columns: 1fr; padding: 10px 16px; }
+  .list { position: static; max-height: none; }
+  .trim, .grid2 { grid-template-columns: 1fr; }
+  .styles { grid-template-columns: repeat(2, 1fr); }
+  header { flex-wrap: wrap; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Clip review</h1>
+  <div class="src" id="src"></div>
+  <span class="chip" id="jobstat" hidden></span>
+  <button id="addclip" title="New clip starting at the playhead">+ Clip at playhead</button>
+  <button class="primary" id="renderall">Render approved</button>
+</header>
+
+<div class="layout">
+  <div class="list" id="list"></div>
+
+  <div class="panel" id="editor">
+    <video class="src" id="player" controls preload="metadata"></video>
+    <div class="timeline" id="timeline"><div class="range" id="tlrange"></div><div class="head" id="tlhead"></div>
+      <span class="lbl" id="tlL" style="left:4px"></span><span class="lbl" id="tlR" style="right:4px"></span></div>
+    <div class="row">
+      <button id="playclip">&#9654; Play clip</button>
+      <button id="playfrom">Play from 3s before</button>
+      <span class="dur" id="dur"></span>
+      <span style="flex:1"></span>
+      <button class="ok" id="approve">Approve</button>
+      <button class="bad" id="reject">Reject</button>
+    </div>
+
+    <div class="trim">
+      <div>
+        <label>Start (s)</label>
+        <div class="row">
+          <button data-nudge="start:-1">-1</button><button data-nudge="start:-0.25">-.25</button>
+          <input id="start" type="number" step="0.05">
+          <button data-nudge="start:0.25">+.25</button><button data-nudge="start:1">+1</button>
+          <button id="setstart" title="Set start to the playhead">&#8676; playhead</button>
+        </div>
+      </div>
+      <div>
+        <label>End (s)</label>
+        <div class="row">
+          <button data-nudge="end:-1">-1</button><button data-nudge="end:-0.25">-.25</button>
+          <input id="end" type="number" step="0.05">
+          <button data-nudge="end:0.25">+.25</button><button data-nudge="end:1">+1</button>
+          <button id="setend" title="Set end to the playhead">playhead &#8677;</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h2>Transcript</h2>
+      <div class="words" id="words"></div>
+      <div class="hint">Click a word to jump there. Alt/Option-click sets the start at that word, Shift-click sets the end after it.</div>
+    </div>
+
+    <div class="sec grid2">
+      <div><label>Title (used for the file name)</label><input id="title"></div>
+      <div><label>On-screen hook</label><input id="hook"></div>
+    </div>
+
+    <div class="sec">
+      <h2>Caption style</h2>
+      <div class="styles" id="styles"></div>
+      <div class="styledesc" id="styledesc"></div>
+    </div>
+    <div class="why" id="why"></div>
+    <div class="row sec">
+      <button class="primary" id="render">Render this clip</button>
+      <button id="del" class="bad" style="margin-left:auto">Delete clip</button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div class="panel out outcol" id="out">
+    <h2>Output</h2>
+    <div id="outvideo"></div>
+    <div id="copybox"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (t) => { t = Math.max(0, t); const m = Math.floor(t / 60), s = (t % 60).toFixed(1).padStart(4, "0"); return `${m}:${s}`; };
+let S = null, sel = null, words = [], wordsKey = "", stopAt = null, copyTab = "tiktok", saveTimer = null;
+const PLATFORMS = { tiktok: "TikTok", youtube_shorts: "Shorts", instagram: "Reels", x: "X" };
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1600); }
+const cur = () => S && S.clips.find((c) => c.index === sel);
+
+async function refresh(full) {
+  S = await api("/api/state");
+  if (sel === null && S.clips.length) sel = S.clips[0].index;
+  if (!cur() && S.clips.length) sel = S.clips[0].index;
+  $("src").textContent = `${S.source.name} · ${S.clips.length} clips · output: ${S.out_dir}`;
+  const p = $("player");
+  if (S.source.ready && !p.src) p.src = S.source.url;
+  renderList();
+  renderEditor(full);
+  renderOut(full);
+  renderJobs();
+}
+
+function renderJobs() {
+  const running = S.clips.filter((c) => c.job && (c.job.state === "running" || c.job.state === "queued"));
+  const el = $("jobstat");
+  el.hidden = !running.length;
+  if (running.length) {
+    const r = running.find((c) => c.job.state === "running");
+    el.className = "chip run";
+    el.textContent = r ? `Rendering #${r.index}: ${r.job.msg || "working"} (${running.length} in queue)` : `${running.length} queued`;
+  }
+  const n = S.clips.filter((c) => c.status === "approved" && (!c.rendered || c.outdated)).length;
+  $("renderall").textContent = n ? `Render approved (${n})` : "Render approved";
+  $("renderall").disabled = !n;
+}
+
+function renderList() {
+  $("list").innerHTML = "";
+  for (const c of S.clips) {
+    const d = document.createElement("div");
+    d.className = `card ${c.status} ${c.index === sel ? "sel" : ""}`;
+    let badge = "";
+    if (c.job && c.job.state === "running") badge = `<span class="chip run">rendering</span>`;
+    else if (c.job && c.job.state === "queued") badge = `<span class="chip run">queued</span>`;
+    else if (c.job && c.job.state === "error") badge = `<span class="chip warn">error</span>`;
+    else if (c.rendered && c.outdated) badge = `<span class="chip warn">needs re-render</span>`;
+    else if (c.rendered) badge = `<span class="chip ok">rendered</span>`;
+    d.innerHTML = `<div class="t">${c.index}. ${esc(c.title)}</div>
+      <div class="m"><span>${fmt(c.start)}</span><span>${c.duration.toFixed(1)}s</span>
+      <span class="chip">${c.style}</span>${c.score ? `<span>score ${c.score}</span>` : ""}${badge}</div>`;
+    d.onclick = () => { sel = c.index; renderList(); renderEditor(true); renderOut(true); seek(c.start); };
+    $("list").appendChild(d);
+  }
+}
+
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch])); }
+
+async function renderEditor(full) {
+  const c = cur();
+  $("editor").style.visibility = c ? "visible" : "hidden";
+  if (!c) return;
+  const active = document.activeElement;
+  for (const k of ["start", "end", "title", "hook"]) {
+    if (full || active !== $(k)) $(k).value = k === "start" || k === "end" ? c[k].toFixed(2) : c[k];
+  }
+  const d = c.end - c.start, bad = d < S.limits.min || d > S.limits.max;
+  $("dur").textContent = `${d.toFixed(1)}s${bad ? ` (target ${S.limits.min}-${S.limits.max}s)` : ""}`;
+  $("dur").className = "dur" + (bad ? " bad" : "");
+  $("approve").classList.toggle("on", c.status === "approved");
+  $("reject").classList.toggle("on", c.status === "rejected");
+  $("why").textContent = c.rationale ? `Why this clip: ${c.rationale}` : "";
+  $("err").textContent = c.job && c.job.error ? c.job.error : "";
+  const busy = c.job && (c.job.state === "running" || c.job.state === "queued");
+  $("render").disabled = busy;
+  $("render").textContent = busy ? "Rendering..." : c.rendered ? (c.outdated ? "Re-render (settings changed)" : "Re-render") : "Render this clip";
+  const st = $("styles");
+  if (full || !st.children.length) {
+    st.innerHTML = "";
+    for (const [k] of Object.entries(S.styles)) {
+      const b = document.createElement("button");
+      b.textContent = k; b.dataset.style = k;
+      b.onclick = () => save({ style: k }, true);
+      st.appendChild(b);
+    }
+  }
+  for (const b of st.children) b.classList.toggle("on", b.dataset.style === c.style);
+  $("styledesc").textContent = S.styles[c.style] || "";
+  const key = `${c.index}:${c.start}:${c.end}`;
+  if (key !== wordsKey) {
+    wordsKey = key;
+    words = await api(`/api/words?start=${c.start - 8}&end=${c.end + 8}`);
+    drawWords();
+  }
+  drawTimeline();
+}
+
+function drawWords() {
+  const c = cur(); if (!c) return;
+  const box = $("words"); box.innerHTML = "";
+  words.forEach(([w, s, e]) => {
+    const sp = document.createElement("span");
+    sp.textContent = w; sp.dataset.s = s; sp.dataset.e = e;
+    if (e > c.start && s < c.end) sp.className = "in";
+    sp.onclick = (ev) => {
+      if (ev.altKey) save({ start: Math.max(0, s - 0.08) }, true);
+      else if (ev.shiftKey) save({ end: e + 0.25 }, true);
+      else seek(s);
+    };
+    box.appendChild(sp); box.appendChild(document.createTextNode(" "));
+  });
+}
+
+function drawTimeline() {
+  const c = cur(); if (!c) return;
+  const pad = Math.max(10, (c.end - c.start) * 0.4);
+  const a = Math.max(0, c.start - pad), b = Math.min(S.source.duration, c.end + pad), span = b - a;
+  const r = $("tlrange");
+  r.style.left = `${((c.start - a) / span) * 100}%`;
+  r.style.width = `${((c.end - c.start) / span) * 100}%`;
+  $("tlL").textContent = fmt(a); $("tlR").textContent = fmt(b);
+  const t = $("player").currentTime;
+  $("tlhead").style.left = `${Math.min(100, Math.max(0, ((t - a) / span) * 100))}%`;
+  $("timeline").dataset.a = a; $("timeline").dataset.span = span;
+  for (const sp of $("words").children) {
+    if (sp.dataset && sp.dataset.s !== undefined) sp.classList.toggle("now", t >= +sp.dataset.s && t < +sp.dataset.e);
+  }
+}
+
+function renderOut(full) {
+  const c = cur(); if (!c) { $("outvideo").innerHTML = ""; $("copybox").innerHTML = ""; return; }
+  const ov = $("outvideo");
+  const want = c.rendered ? `/media/out/${encodeURIComponent(c.file)}?v=${c.render_sig}` : "";
+  if (full || ov.dataset.src !== want) {
+    ov.dataset.src = want;
+    ov.innerHTML = c.rendered
+      ? `<video controls playsinline src="${want}"></video>${c.outdated ? '<div class="hint" style="color:var(--warn)">Settings changed since this render. Re-render to update.</div>' : ""}`
+      : `<div class="empty">Not rendered yet.<br>Approve it and press Render, or use "Render this clip".</div>`;
+  }
+  const cb = $("copybox");
+  if (!full && cb.contains(document.activeElement)) return;
+  if (!S.copy_enabled) { cb.innerHTML = '<div class="hint">Post copy disabled (--no-copy).</div>'; return; }
+  if (!c.copy || !c.copy.tiktok) {
+    cb.innerHTML = `<div class="hint">Post copy is written when the clip is rendered.</div>
+      <button style="margin-top:8px" id="gencopy">Write copy now</button>`;
+    $("gencopy").onclick = () => api("/api/copy", { indices: [c.index] }).then(() => toast("Writing copy..."));
+    return;
+  }
+  const tabs = Object.entries(PLATFORMS).map(([k, v]) => `<button data-tab="${k}" class="${k === copyTab ? "on" : ""}">${v}</button>`).join("");
+  const p = c.copy[copyTab];
+  let fields = "";
+  const tagStr = (a) => (a || []).join(" ");
+  if (copyTab === "tiktok") fields = area("caption", "Caption", p.caption, 2200) + area("hashtags", "Hashtags", tagStr(p.hashtags));
+  if (copyTab === "youtube_shorts") fields = area("title", "Title", p.title, 100) + area("description", "Description", p.description, 5000) + area("hashtags", "Hashtags", tagStr(p.hashtags));
+  if (copyTab === "instagram") fields = area("caption", "Caption", p.caption, 2200) + area("hashtags", "Hashtags", tagStr(p.hashtags));
+  if (copyTab === "x") fields = area("post", "Post", p.post, 280) + area("alt_post", "Alternative", p.alt_post, 280);
+  cb.innerHTML = `<div class="tabs">${tabs}</div>${fields}
+    ${c.copy_outdated ? '<div class="hint" style="color:var(--warn)">The clip changed since this copy was written.</div>' : ""}
+    <div class="row" style="margin-top:8px"><button id="copyall">Copy all for ${PLATFORMS[copyTab]}</button>
+    <button id="regen" style="margin-left:auto">Rewrite copy</button></div>`;
+  cb.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { copyTab = b.dataset.tab; renderOut(true); }));
+  cb.querySelectorAll("textarea").forEach((t) => {
+    const upd = () => {
+      const n = cb.querySelector(`[data-count="${t.dataset.f}"]`);
+      if (n && t.dataset.max) { n.textContent = `${t.value.length}/${t.dataset.max}`; n.classList.toggle("over", t.value.length > +t.dataset.max); }
+    };
+    upd();
+    t.oninput = () => {
+      upd();
+      const copy = structuredClone(c.copy);
+      copy[copyTab][t.dataset.f] = t.dataset.f === "hashtags" ? t.value.split(/\s+/).filter(Boolean) : t.value;
+      c.copy = copy;
+      clearTimeout(saveTimer); saveTimer = setTimeout(() => api(`/api/clip/${c.index}`, { copy }).catch((e) => toast(e.message)), 500);
+    };
+  });
+  $("copyall").onclick = () => {
+    const p2 = c.copy[copyTab];
+    const txt = copyTab === "x" ? p2.post : copyTab === "youtube_shorts" ? `${p2.title}\n\n${p2.description}\n\n${tagStr(p2.hashtags)}` : `${p2.caption}\n\n${tagStr(p2.hashtags)}`;
+    navigator.clipboard.writeText(txt).then(() => toast("Copied"));
+  };
+  $("regen").onclick = () => api("/api/copy", { indices: [c.index] }).then(() => toast("Rewriting copy..."));
+}
+function area(f, label, val, max) {
+  return `<label>${label}</label><textarea data-f="${f}" ${max ? `data-max="${max}"` : ""}>${esc(val)}</textarea>${max ? `<div class="count" data-count="${f}"></div>` : ""}`;
+}
+
+async function save(patch, redraw) {
+  const c = cur(); if (!c) return;
+  Object.assign(c, patch);
+  try { await api(`/api/clip/${c.index}`, patch); } catch (e) { toast(e.message); }
+  await refresh(redraw);
+}
+
+function seek(t) { const p = $("player"); if (p.src) { p.currentTime = t; } }
+$("player").addEventListener("timeupdate", () => {
+  const p = $("player");
+  if (stopAt !== null && p.currentTime >= stopAt) { p.pause(); stopAt = null; }
+  drawTimeline();
+});
+$("playclip").onclick = () => { const c = cur(); seek(c.start); stopAt = c.end; $("player").play(); };
+$("playfrom").onclick = () => { const c = cur(); seek(Math.max(0, c.start - 3)); stopAt = c.end; $("player").play(); };
+$("timeline").onclick = (e) => {
+  const r = e.currentTarget.getBoundingClientRect();
+  seek(+e.currentTarget.dataset.a + ((e.clientX - r.left) / r.width) * +e.currentTarget.dataset.span);
+};
+$("setstart").onclick = () => save({ start: $("player").currentTime }, true);
+$("setend").onclick = () => save({ end: $("player").currentTime }, true);
+document.querySelectorAll("[data-nudge]").forEach((b) => (b.onclick = () => {
+  const [k, d] = b.dataset.nudge.split(":"); const c = cur();
+  save({ [k]: +(c[k] + +d).toFixed(3) }, true);
+}));
+for (const k of ["start", "end"]) $(k).onchange = () => save({ [k]: +$(k).value }, true);
+for (const k of ["title", "hook"]) $(k).oninput = () => { clearTimeout(saveTimer); saveTimer = setTimeout(() => save({ [k]: $(k).value }), 500); };
+$("approve").onclick = () => { const c = cur(); save({ status: c.status === "approved" ? "pending" : "approved" }); };
+$("reject").onclick = () => { const c = cur(); save({ status: c.status === "rejected" ? "pending" : "rejected" }); };
+$("render").onclick = async () => { const c = cur(); await api(`/api/clip/${c.index}`, { status: "approved" }); await api("/api/render", { indices: [c.index] }); refresh(); };
+$("renderall").onclick = async () => {
+  const ids = S.clips.filter((c) => c.status === "approved" && (!c.rendered || c.outdated)).map((c) => c.index);
+  await api("/api/render", { indices: ids }); toast(`Rendering ${ids.length} clip(s)`); refresh();
+};
+$("del").onclick = async () => {
+  const c = cur(); if (!confirm(`Delete clip ${c.index} "${c.title}" from the list?`)) return;
+  await api(`/api/clip/${c.index}/delete`, {}); sel = null; refresh(true);
+};
+$("addclip").onclick = async () => {
+  const t = $("player").currentTime || 0;
+  const r = await api("/api/clip/new", { start: t, end: Math.min(S.source.duration, t + 30) });
+  sel = r.index; await refresh(true); toast("Added. Trim it, then render.");
+};
+document.addEventListener("keydown", (e) => {
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
+  const p = $("player");
+  if (e.key === " ") { e.preventDefault(); p.paused ? p.play() : p.pause(); }
+  if (e.key === "i") save({ start: p.currentTime }, true);
+  if (e.key === "o") save({ end: p.currentTime }, true);
+  if (e.key === "a") $("approve").click();
+  if (e.key === "x") $("reject").click();
+  if (e.key === "j" || e.key === "k") {
+    const i = S.clips.findIndex((c) => c.index === sel), n = S.clips[i + (e.key === "j" ? 1 : -1)];
+    if (n) { sel = n.index; refresh(true).then(() => seek(n.start)); }
+  }
+});
+refresh(true).then(() => { const c = cur(); if (c) setTimeout(() => seek(c.start), 400); });
+setInterval(() => refresh(false).catch(() => {}), 1500);
+</script>
+</body>
+</html>

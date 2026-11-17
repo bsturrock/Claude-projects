@@ -64,7 +64,7 @@ def test_ass_contains_highlight_and_hook():
     ass = build_ass(t.words, get_style("bold"), hook="Big hook", duration=10)
     assert "Big hook" in ass
     assert "\\1c&H0000E5FF" in ass  # yellow highlight in ASS BGR order
-    assert ass.count("Dialogue: 0,") == len(t.words)
+    assert ass.count(",Cap,,") == len(t.words)  # one text event per spoken word
 
 
 def test_ass_escapes_override_braces():
@@ -77,3 +77,39 @@ def test_srt_format():
     t = make_transcript("One two three. Four five six.")
     srt = build_srt(t.words, get_style("bold"))
     assert srt.startswith("1\n00:00:00,500 --> ")
+
+
+def test_all_presets_build():
+    from clipper.captions import PRESETS
+    t = make_transcript("Hello world. This is a test of captions, with commas.")
+    for name in PRESETS:
+        ass = build_ass(t.words, get_style(name), hook="Hook", duration=10)
+        assert "Style: Cap," in ass
+        if PRESETS[name].box:
+            assert "CapBox" in ass.split("[Events]")[1]
+
+
+def test_mfcc_shape():
+    import numpy as np
+    from clipper.speaker import mfcc
+    sig = (np.sin(np.arange(16000) / 5) * 8000).astype(np.int16)
+    m = mfcc(sig)
+    assert m.shape == (99, 13) and np.isfinite(m).all()
+
+
+def test_choose_focus_switches_with_hysteresis():
+    import numpy as np
+    from clipper.reframe import choose_focus
+    from clipper.speaker import Track
+    n = 200
+    frames = np.arange(n)
+    boxes = np.tile([0, 0, 50, 50], (n, 1)).astype(float)
+    a = Track(frames, boxes, scores=np.where(frames < 100, 3.0, -2.0))
+    b = Track(frames, boxes + [500, 0, 500, 0], scores=np.where(frames < 100, -2.0, 3.0))
+    # a brief blip from b early on should not cause a cut
+    b.scores[30:36] = 4.0
+    focus, _ = choose_focus([a, b], 0, n)
+    assert focus[0] == 0 and focus[40] == 0
+    assert focus[-1] == 1
+    assert np.sum(np.diff(focus) != 0) == 1
+    assert 95 <= np.argmax(focus == 1) <= 106

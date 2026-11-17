@@ -7,6 +7,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .captions import PRESETS
 from .llm import structured_call
 from .transcript import Transcript, Word
 
@@ -19,8 +20,14 @@ class Clip:
     hook: str = ""
     rationale: str = ""
     score: int = 50
+    style: str = ""  # caption preset; "" means default
     index: int = 0
     copy: dict = field(default_factory=dict)
+    status: str = "pending"   # pending | approved | rejected (review UI)
+    file: str = ""            # rendered mp4 name, relative to the output dir
+    render_sig: str = ""      # settings the current file was rendered with
+    copy_sig: str = ""        # clip text the current copy was written for
+    layout: str = ""          # human-readable reframing summary
 
     @property
     def duration(self) -> float:
@@ -53,11 +60,19 @@ resolution, and it ends on that beat rather than trailing into the next topic.
 - It starts at the beginning of a sentence and ends at the end of one.
 - It matches the creator's brief (topic, tone, audience) given below. A moment \
 that is great in general but off-brief should score lower than an on-brief one.
+- Controversial, provocative, heated, emotional or profane moments are fair game \
+and are often the strongest clips: hot takes, arguments, people pushing back on \
+each other, blunt opinions. Do not avoid or soften them. The one limit is \
+honesty: the clip must not misrepresent what the speaker meant, so include \
+enough of the exchange that the point survives being cut out of context.
 
 Timestamps in the transcript are in seconds. Use them exactly; choose start and \
 end values from the timestamps shown. Score each candidate 1-100 for how likely \
 it is to perform AND fit the brief. Return candidates sorted best first. Prefer \
-variety: do not return several clips that make the same point.\
+variety: do not return several clips that make the same point.
+
+For each clip also choose the caption style that best fits its content:
+{styles}\
 """
 
 SELECTION_SCHEMA = {
@@ -74,8 +89,9 @@ SELECTION_SCHEMA = {
                     "hook": {"type": "string", "description": "On-screen hook headline, <= 8 words, no hashtags"},
                     "rationale": {"type": "string", "description": "One sentence: why this works and fits the brief"},
                     "score": {"type": "integer", "description": "1-100"},
+                    "style": {"type": "string", "enum": list(PRESETS)},
                 },
-                "required": ["start", "end", "title", "hook", "rationale", "score"],
+                "required": ["start", "end", "title", "hook", "rationale", "score", "style"],
                 "additionalProperties": False,
             },
         }
@@ -100,7 +116,8 @@ def find_moments(t: Transcript, *, brief: str, tone: str, count: int,
         f"Each clip must be between {min_len:.0f} and {max_len:.0f} seconds long. {target}\n\n"
         f"<transcript>\n{render_transcript(t)}\n</transcript>"
     )
-    data = structured_call(system=SELECTION_SYSTEM, user=user,
+    styles = "\n".join(f"- {k}: {v.description}" for k, v in PRESETS.items())
+    data = structured_call(system=SELECTION_SYSTEM.format(styles=styles), user=user,
                            schema=SELECTION_SCHEMA, model=model, effort=effort)
     return [Clip(**c) for c in data["clips"]]
 
@@ -199,6 +216,11 @@ def dedupe(clips: list[Clip], max_overlap: float = 0.25) -> list[Clip]:
     return kept
 
 
+def clip_from_dict(d: dict) -> Clip:
+    known = {f for f in Clip.__dataclass_fields__}
+    return Clip(**{k: v for k, v in d.items() if k in known})
+
+
 def load_manual(path: Path) -> list[Clip]:
     """Load clips from JSON: a list of {start, end, title?, hook?} objects."""
     data = json.loads(path.read_text())
@@ -210,5 +232,6 @@ def load_manual(path: Path) -> list[Clip]:
             start=float(c["start"]), end=float(c["end"]),
             title=c.get("title") or f"Clip {i}", hook=c.get("hook", ""),
             rationale=c.get("rationale", "manual"), score=int(c.get("score", 100 - i)),
+            style=c.get("style", "") if c.get("style", "") in PRESETS else "",
         ))
     return out

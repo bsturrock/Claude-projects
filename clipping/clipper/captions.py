@@ -13,34 +13,57 @@ FONTS_DIR = Path(__file__).parent / "fonts"
 @dataclass
 class CaptionStyle:
     font: str = "Poppins Black"
-    size: int = 96
+    size: int = 156
     color: str = "#FFFFFF"
     highlight: str = "#FFE500"
+    palette: tuple = ()          # if set, highlight colour rotates per caption chunk
     outline_color: str = "#000000"
-    outline: float = 7
-    shadow: float = 3
+    outline: float = 9
+    shadow: float = 4
+    blur: float = 0              # soft edge on outline/shadow
     uppercase: bool = True
     max_words: int = 3
-    max_chars: int = 16
-    pop: bool = True
-    y: float = 0.70  # vertical centre of the caption block, fraction of frame height
+    max_chars: int = 15
+    pop: bool = True             # chunk scales in when it appears
+    bounce: bool = False         # overshoot on the pop
+    active_scale: int = 100      # % size of the word being spoken
+    tilt: float = 0              # max random rotation per chunk, degrees
+    fade_ms: int = 0             # fade-in per chunk (instead of pop)
+    y: float = 0.70              # vertical centre of the caption block, fraction of frame height
     letter_spacing: float = 0
+    box: bool = False            # translucent box behind the text instead of an outline
+    box_alpha: int = 0x50        # 0 = opaque, 255 = invisible
+    word_gap: int = 1            # extra hard spaces between words (tight display fonts)
+    description: str = ""
 
 
 PRESETS: dict[str, CaptionStyle] = {
-    # Big, punchy, all caps, yellow active word. The default TikTok look.
-    "bold": CaptionStyle(),
-    # Mixed case, slightly smaller, green active word, more words per line.
-    "clean": CaptionStyle(font="Poppins ExtraBold", size=70, highlight="#3DFF8B",
-                          uppercase=False, max_words=4, max_chars=24, outline=6, shadow=2),
-    # Tall condensed type, magazine style.
-    "impact": CaptionStyle(font="Anton", size=104, highlight="#FF3B5C", max_words=3,
-                           max_chars=16, outline=6, shadow=0, letter_spacing=1),
-    # Subtle: white only, no highlight or pop, for serious/educational content.
-    "minimal": CaptionStyle(font="Poppins ExtraBold", size=62, highlight="#FFFFFF",
-                            uppercase=False, max_words=5, max_chars=30, outline=5,
-                            shadow=0, pop=False, y=0.74),
+    "bold": CaptionStyle(
+        word_gap=2,
+        description="Big all-caps sans, yellow active word, pop-in. Hot takes, commentary, "
+                    "podcasts, motivation, most viral talking-head content.",
+    ),
+    "playful": CaptionStyle(
+        font="Lilita One", size=114, palette=("#FFE500", "#3DF5FF", "#FF5FD8", "#8CFF4F"),
+        outline=9, shadow=5, max_words=3, max_chars=15, bounce=True, word_gap=2, active_scale=114, tilt=4,
+        description="Chunky rounded type, colour-cycling active word, bounce and tilt. Gaming, "
+                    "streams, comedy, reactions, entertainment, lighthearted chaos.",
+    ),
+    "editorial": CaptionStyle(
+        font="DM Serif Display", size=130, highlight="#F5C451", outline=16, shadow=0,
+        box=True, box_alpha=0x48, uppercase=False, max_words=4, max_chars=24, pop=False,
+        fade_ms=90, y=0.72,
+        description="Elegant serif, sentence case, gold active word, soft fade. News, politics, "
+                    "business, finance, history, documentary, serious or emotional moments.",
+    ),
+    "clean": CaptionStyle(
+        font="Poppins ExtraBold", size=138, highlight="#3DFF8B", outline=8, shadow=3, word_gap=2,
+        uppercase=False, max_words=4, max_chars=24,
+        description="Modern sans, sentence case, green active word. Education, how-to, tech, "
+                    "science, interviews, calm explainers.",
+    ),
 }
+DEFAULT_STYLE = "bold"
 
 
 def get_style(name: str, **overrides) -> CaptionStyle:
@@ -95,6 +118,10 @@ def build_ass(words: list[Word], style: CaptionStyle, *, hook: str = "",
     primary = _ass_color(style.color)
     hl = _ass_color(style.highlight)
     oc = _ass_color(style.outline_color)
+    box_c = _ass_color(style.outline_color, style.box_alpha)
+    # With a box, the text layer has no border and a separate layer draws one
+    # box per line (per-run boxes would overlap and leave seams).
+    text_outline = 0 if style.box else style.outline
     back = _ass_color("#000000", 0x80)
 
     header = f"""[Script Info]
@@ -107,8 +134,9 @@ YCbCr Matrix: TV.709
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{style.font},{style.size},{primary},{hl},{oc},{back},0,0,0,0,100,100,{style.letter_spacing},0,1,{style.outline},{style.shadow},5,70,70,0,1
-Style: Hook,Poppins ExtraBold,68,&H00111111,&H00111111,&H00FFFFFF,&H00FFFFFF,0,0,0,0,100,100,0,0,3,18,0,5,90,90,0,1
+Style: Cap,{style.font},{style.size},{primary},{hl},{oc},{back},0,0,0,0,100,100,{style.letter_spacing},0,1,{text_outline},{style.shadow},5,70,70,0,1
+Style: CapBox,{style.font},{style.size},&HFF000000,&HFF000000,{box_c},&HFF000000,0,0,0,0,100,100,{style.letter_spacing},0,3,{style.outline},0,5,70,70,0,1
+Style: Hook,Poppins ExtraBold,104,&H00111111,&H00111111,&H00FFFFFF,&H00FFFFFF,0,0,0,0,100,100,0,0,3,18,0,5,90,90,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -120,9 +148,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         fade = "" if hook_mode == "full" else r"\fad(150,250)"
         lines.append(
             f"Dialogue: 1,{_ts(0)},{_ts(end)},Hook,,0,0,0,,"
-            f"{{\\pos(540,{int(1920 * 0.15)}){fade}}}{_clean(hook)}"
+            f"{{\\pos(540,{int(1920 * 0.14)}){fade}}}{_clean(hook)}"
         )
 
+    import random
+    rng = random.Random(len(words))  # deterministic per clip
     chunks = chunk_words(words, style)
     for ci, chunk in enumerate(chunks):
         nxt = chunks[ci + 1][0].start if ci + 1 < len(chunks) else None
@@ -132,6 +162,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if duration:
             chunk_end = min(chunk_end, duration)
         texts = [_clean(w.text.upper() if style.uppercase else w.text) for w in chunk]
+        hl_c = _ass_color(style.palette[ci % len(style.palette)]) if style.palette else hl
+        tilt = round(rng.uniform(-style.tilt, style.tilt), 1) if style.tilt else 0
         for wi, w in enumerate(chunk):
             start = w.start if wi else chunk[0].start
             end = chunk[wi + 1].start if wi + 1 < len(chunk) else chunk_end
@@ -139,11 +171,32 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 continue
             parts = []
             for j, t in enumerate(texts):
-                parts.append(f"{{\\1c{hl}}}{t}{{\\1c{primary}}}" if j == wi else t)
+                if j == wi:
+                    # skip the active-word scale on a chunk's first event so its
+                    # inline reset doesn't cancel the whole-line pop animation
+                    animated = wi == 0 and (style.bounce or style.pop)
+                    sc = (f"\\fscx{style.active_scale}\\fscy{style.active_scale}"
+                          if style.active_scale != 100 and not animated else "")
+                    reset = "\\fscx100\\fscy100" if sc else ""
+                    parts.append(f"{{\\1c{hl_c}{sc}}}{t}{{\\1c{primary}{reset}}}")
+                else:
+                    parts.append(t)
             tag = f"\\pos(540,{y_px})"
-            if style.pop and wi == 0:
-                tag += r"\fscx82\fscy82\t(0,110,\fscx100\fscy100)"
-            lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Cap,,0,0,0,,{{{tag}}}" + " ".join(parts))
+            if tilt:
+                tag += f"\\frz{tilt}"
+            if style.blur:
+                tag += f"\\blur{style.blur}"
+            if wi == 0:
+                if style.bounce:
+                    tag += r"\fscx70\fscy70\t(0,90,\fscx112\fscy112)\t(90,170,\fscx100\fscy100)"
+                elif style.pop:
+                    tag += r"\fscx82\fscy82\t(0,110,\fscx100\fscy100)"
+                elif style.fade_ms:
+                    tag += f"\\fad({style.fade_ms},0)"
+            sep = " " + "\\h" * (style.word_gap - 1) if style.word_gap > 1 else " "
+            if style.box:
+                lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},CapBox,,0,0,0,,{{{tag}}}" + sep.join(texts))
+            lines.append(f"Dialogue: 1,{_ts(start)},{_ts(end)},Cap,,0,0,0,,{{{tag}}}" + sep.join(parts))
 
     return header + "\n".join(lines) + "\n"
 

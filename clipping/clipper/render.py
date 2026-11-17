@@ -7,7 +7,8 @@ from pathlib import Path
 
 from .captions import FONTS_DIR
 from .media import MediaError, VideoInfo, escape_filter_path, run
-from .reframe import OUT_H, OUT_W, Plan, Reframer, _iter_frames
+from .reframe import OUT_H, OUT_W, Plan, Reframer
+from .speaker import iter_frames
 
 
 def render_clip(info: VideoInfo, start: float, end: float, plan: Plan, ass_path: Path,
@@ -44,7 +45,7 @@ def render_clip(info: VideoInfo, start: float, end: float, plan: Plan, ass_path:
                            cwd=ass_path.parent)
     n = 0
     try:
-        for frame in _iter_frames(str(info.path), start, dur, fps, None, info.display_size):
+        for frame in iter_frames(str(info.path), start, dur, fps, None, info.display_size):
             enc.stdin.write(reframer.render(frame, n / fps).tobytes())
             n += 1
     except BrokenPipeError:

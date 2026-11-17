@@ -22,7 +22,8 @@ before "more"), then 1-3 short lines of context, a light call to action, then \
 - X: a standalone post under 260 characters that reads like a person talking, \
 not an ad. At most one hashtag, usually none. Also give one alternative angle.
 
-Match the creator's tone. Never invent facts, quotes, names or numbers that \
+Match the creator's tone. If the clip is provocative or heated, the copy can \
+lean into that tension; do not sanitize it into something bland. Never invent facts, quotes, names or numbers that \
 are not in the clip transcript. Do not use emojis unless the tone calls for \
 them. Do not use em dashes.\
 """

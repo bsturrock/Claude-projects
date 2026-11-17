@@ -56,10 +56,21 @@ def transcribe(audio: Path, model_size: str = "small", language: str | None = No
     """
     from faster_whisper import WhisperModel
 
+    import wave
+
+    import numpy as np
+
+    # Read the 16 kHz mono WAV ourselves: avoids faster-whisper's PyAV decoder,
+    # which breaks across PyAV versions.
+    with wave.open(str(audio), "rb") as w:
+        if w.getframerate() != 16000 or w.getnchannels() != 1 or w.getsampwidth() != 2:
+            raise ValueError("transcribe() expects 16 kHz mono 16-bit WAV (see media.extract_audio)")
+        pcm = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768.0
+
     compute_type = "int8" if device in ("cpu", "auto") else "float16"
     model = WhisperModel(model_size, device=device, compute_type=compute_type)
     seg_iter, info = model.transcribe(
-        str(audio),
+        pcm,
         language=language,
         word_timestamps=True,
         vad_filter=True,

@@ -31,10 +31,17 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--clips", dest="clips_path", type=Path,
                    help="Skip AI selection: JSON list of {start, end, title, hook}")
     g.add_argument("--select-only", action="store_true",
-                   help="Stop after selection and write clips.json for review")
+                   help="Stop after selection and write clips.json")
+    g.add_argument("-r", "--review", action="store_true",
+                   help="Open the browser review UI after selection (trim, restyle, approve, render)")
+    g.add_argument("--reselect", action="store_true",
+                   help="With --review: ignore a saved clips.json and ask Claude again")
+    g.add_argument("--port", type=int, default=8765, help="Review UI port (default 8765)")
 
     g = p.add_argument_group("look")
-    g.add_argument("--style", choices=sorted(PRESETS), default="bold", help="Caption preset")
+    g.add_argument("--style", choices=["auto", *PRESETS], default="auto",
+                   help="Caption style. auto (default) lets Claude pick per clip: "
+                        + "; ".join(f"{k} = {v.description.split('.')[0].lower()}" for k, v in PRESETS.items()))
     g.add_argument("--font", help="Override caption font family")
     g.add_argument("--font-size", type=int, help="Override caption font size (px at 1080x1920)")
     g.add_argument("--color", help="Caption colour, #RRGGBB")
@@ -45,7 +52,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Show the hook headline at the top: first ~3.5s, whole clip, or never")
     g.add_argument("--layout", choices=["auto", "fit", "center"], default="auto",
                    help="auto = face tracking / split screen / fit per shot")
-    g.add_argument("--no-stack", action="store_true", help="Never use two-person split screen")
+    g.add_argument("--two-shot", choices=["cut", "stack"], default="cut",
+                   help="People too far apart for one crop: cut to whoever is speaking (default), "
+                        "or permanent split screen")
+    g.add_argument("--no-crosstalk-split", action="store_true",
+                   help="Don't switch to split screen when people talk over each other")
+    g.add_argument("--no-asd", action="store_true",
+                   help="Disable active speaker detection (follow the largest face)")
 
     g = p.add_argument_group("models")
     g.add_argument("--whisper-model", default="small",
@@ -77,11 +90,12 @@ def main(argv: list[str] | None = None) -> int:
         source=a.source, out_dir=a.out, brief=a.brief, tone=a.tone, count=a.count,
         min_len=a.min_len, max_len=a.max_len, target_len=a.target_len,
         style=a.style, style_overrides=overrides, hook_mode=a.hook_overlay,
-        layout=a.layout, allow_stack=not a.no_stack, whisper_model=a.whisper_model,
+        layout=a.layout, two_shot=a.two_shot, crosstalk=not a.no_crosstalk_split,
+        use_asd=not a.no_asd, whisper_model=a.whisper_model,
         language=a.language, transcript_path=a.transcript_path, clips_path=a.clips_path,
         write_post_copy=not a.no_copy, copy_extra=a.copy_notes, model=a.model,
         effort=a.effort, crf=a.crf, preset=a.preset, loudnorm=not a.no_loudnorm,
-        select_only=a.select_only,
+        select_only=a.select_only, review=a.review, reselect=a.reselect, port=a.port,
     )
     try:
         run(opts)
