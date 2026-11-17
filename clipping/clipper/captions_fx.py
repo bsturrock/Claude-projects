@@ -223,12 +223,24 @@ class FxCaptions:
                  (tx + 15, top - tail + 18), (tx + 13, top - 13), (tx + 20, top - 15), (tx + 6, top + border + 2)]
         d.polygon(inner, fill=YAP_YELLOW + (255,))
         ox, oy = border + padx, top + border + pady - 2
-        for j, (text, (x0, y0, x1, y1)) in enumerate(zip(L.texts, L.boxes)):
-            spoken = j <= k
-            em = _key(text) in self.emph
-            if spoken and em:
+        # one pill per run of adjacent spoken key words on the same line ("def con 2")
+        em_on = [(_key(t) in self.emph) and j <= k for j, t in enumerate(L.texts)]
+        j = 0
+        while j < len(L.texts):
+            if em_on[j]:
+                e = j
+                while e + 1 < len(L.texts) and em_on[e + 1] and L.boxes[e + 1][1] == L.boxes[j][1]:
+                    e += 1
+                x0, y0 = L.boxes[j][0], L.boxes[j][1]
+                x1, y1 = L.boxes[e][2], L.boxes[e][3]
                 d.rounded_rectangle((ox + x0 - 10, oy + y0 + 8, ox + x1 + 10, oy + y1 - 2), radius=18,
                                     fill=YAP_BLACK + (255,))
+                j = e + 1
+            else:
+                j += 1
+        for j, (text, (x0, y0, x1, y1)) in enumerate(zip(L.texts, L.boxes)):
+            spoken = j <= k
+            if em_on[j]:
                 d.text((ox + x0, oy + y0), text, font=self.font, fill=YAP_YELLOW + (255,))
             else:
                 col = YAP_BLACK + ((255,) if spoken else (80,))

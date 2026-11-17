@@ -202,7 +202,7 @@ def content_box(samples: list, tracks: list[Track], size: tuple[int, int]) -> tu
     """
     sw, sh = size
     full = (0, 0, sw, sh)
-    if len(samples) < 4:
+    if len(samples) < 30:  # under ~6 s of footage, a still shot looks like a static border everywhere
         return full
     stack = np.stack(samples).astype(np.float32)
     std = stack.std(axis=0)

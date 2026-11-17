@@ -394,4 +394,6 @@ def load_manual(path: Path) -> list[Clip]:
         if c.get("segments"):
             out[-1].set_parts([(float(a), float(b)) for a, b in c["segments"]])
             out[-1].kind = c.get("kind", "stitched")
+        out[-1].emphasis = list(c.get("emphasis", []))
+        out[-1].alt_hooks = list(c.get("alt_hooks", []))
     return out
