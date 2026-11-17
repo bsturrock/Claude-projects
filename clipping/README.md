@@ -93,7 +93,7 @@ Brand kits live in `clipper/brands/<id>/` (`logo.png` + `brand.json`). Each clip
 - **Yap** (podcasts, streams, debates): "yap" pops in, then the speech bubble drops from the top, lands on the text with a thump and bounces to rest.
 - **Framebite** (TV, film, established media): the rounded rectangle pops in, then one big bite takes the corner out, with a munch, a jolt and crumbs.
 
-Cold opens get a transition between the payoff and the start of the thought, set per project and overridable per clip (`--transition`): **swipe** (default, a 0.45 s whip pan between the real frames with a tape-rewind sound), **panel** (a branded rewind wipe with "rewind" / "Earlier"), or **none** (a straight cut). Hook headlines are branded too: Yap gets yellow type on a black bubble, Framebite a cream serif title between teal rules, and everything else a dark pill.
+Cold opens get a transition between the payoff and the start of the thought, set per project and overridable per clip (`--transition`): **swipe** (default, a 0.45 s whip pan between the real frames with an air swoosh), **panel** (a branded rewind wipe with "rewind" / "Earlier"), or **none** (a straight cut). Hook headlines are branded too: Yap gets yellow type on a black bubble, Framebite a cream serif title between teal rules, and everything else a dark pill.
 
 Signature caption styles, drawn frame by frame:
 

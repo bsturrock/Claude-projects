@@ -555,8 +555,40 @@ def transition_frames(bid: str, last: np.ndarray, nxt: np.ndarray, fps: float,
         yield frame
 
 
-def write_transition_sound(path: Path, seconds: float = TRANSITION_SECONDS) -> Path:
-    """Tape-rewind zip: a fast warbling down-sweep with a little noise, then a click."""
+def _swoosh(seconds: float) -> np.ndarray:
+    """Air swoosh for the swipe: noise through a band-pass that sweeps up and back down,
+    loudest where the pan is fastest, travelling right to left across the stereo field."""
+    rng = np.random.default_rng(5)
+    n = int(SR * seconds)
+    noise = rng.standard_normal(n)
+    u = np.linspace(0, 1, n)
+    centre = 400 + 2600 * np.sin(np.pi * u) ** 1.5           # Hz: rises to the middle, falls away
+    out = np.zeros(n)
+    lp = bp = 0.0
+    for i in range(n):  # state-variable filter, band-pass output
+        f = 2 * np.sin(np.pi * centre[i] / SR)
+        hp = noise[i] - lp - 0.6 * bp
+        bp += f * hp
+        lp += f * bp
+        out[i] = bp
+    env = np.sin(np.pi * u) ** 2.2                            # peaks with the pan speed
+    mono = out * env
+    mono /= np.max(np.abs(mono)) or 1
+    pan = u                                                   # 0 = right, 1 = left
+    left, right = mono * np.sqrt(0.25 + 0.75 * pan), mono * np.sqrt(1 - 0.75 * pan)
+    return np.stack([left, right], axis=1) * 10 ** (-13 / 20)
+
+
+def write_transition_sound(path: Path, seconds: float = TRANSITION_SECONDS, style: str = "panel") -> Path:
+    """swipe: an air swoosh. panel: tape-rewind zip (warbling down-sweep, then a click)."""
+    if style == "swipe":
+        data = (_swoosh(seconds) * 32767).astype(np.int16)
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(SR)
+            w.writeframes(data.tobytes())
+        return path
     rng = np.random.default_rng(11)
     n = int(SR * seconds)
     t = np.arange(n) / SR

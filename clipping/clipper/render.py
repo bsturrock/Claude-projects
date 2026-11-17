@@ -92,7 +92,7 @@ def render_clip(info: VideoInfo, parts: list[tuple[float, float]], pieces: list[
             if any(p.part < 0 for p in pieces):
                 tdur = next(p.dur for p in pieces if p.part < 0)
                 trans_in = len(parts) + 1
-                inputs += ["-i", str(endcard.write_transition_sound(tmp / "transition.wav", tdur))]
+                inputs += ["-i", str(endcard.write_transition_sound(tmp / "transition.wav", tdur, style=transition))]
             split_out: dict[int, list[str]] = {}
             for k, n in uses.items():
                 outs = [f"[s{k}_{j}]" for j in range(n)]
