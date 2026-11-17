@@ -53,6 +53,7 @@ class Options:
     review: bool = False
     reselect: bool = False
     port: int = 8765
+    out_override: Path | None = None  # studio: exact output folder for this source
 
 
 def log(msg: str) -> None:
@@ -88,14 +89,21 @@ class Project:
         self.opts = opts
         self.clips: list[Clip] = []
         self.lock = threading.RLock()
+        self.on_progress = None  # callable(str) for UIs
+
+    def note(self, msg: str) -> None:
+        log(msg)
+        if self.on_progress:
+            self.on_progress(msg)
 
     # -- 1. ingest + transcribe ---------------------------------------------
     def prepare(self) -> None:
         o = self.opts
         media.require_tools()
         if media.is_url(o.source):
-            log(f"downloading {o.source}")
-            src = media.download(o.source, o.out_dir / "_downloads")
+            self.note("downloading")
+            dl = (o.out_override or o.out_dir) / "_downloads"
+            src = media.download(o.source, dl)
         else:
             src = Path(o.source).expanduser()
             if not src.exists():
@@ -103,7 +111,7 @@ class Project:
         self.src = src
         self.info = media.probe(src)
         name = re.sub(r"[^A-Za-z0-9_-]+", "-", src.stem).strip("-")[:60] or "video"
-        self.out = o.out_dir / name
+        self.out = o.out_override or (o.out_dir / name)
         self.work = self.out / ".work"
         self.work.mkdir(parents=True, exist_ok=True)
         w, h = self.info.display_size
@@ -119,9 +127,11 @@ class Project:
             else:
                 if not self.info.has_audio:
                     raise media.MediaError("Source has no audio track to transcribe.")
-                log(f"transcribing with faster-whisper ({o.whisper_model})")
+                self.note(f"extracting audio")
                 wav = media.extract_audio(src, self.work / "audio.wav")
-                self.transcript = transcribe(wav, o.whisper_model, o.language)
+                self.note(f"transcribing ({o.whisper_model})")
+                self.transcript = transcribe(wav, o.whisper_model, o.language,
+                                             progress=self.on_progress)
                 self.transcript.save(cache)
                 wav.unlink(missing_ok=True)
         log(f"transcript: {len(self.transcript.words)} words, language={self.transcript.language}")
@@ -140,7 +150,7 @@ class Project:
             clips = [clip_from_dict(d) for d in json.loads(self.state_path.read_text())]
             log(f"resuming {len(clips)} clips from {self.state_path} (use --reselect to start over)")
         else:
-            log(f"finding moments with {o.model}")
+            self.note("finding clips with Claude")
             cands = find_moments(
                 self.transcript, brief=o.brief, tone=o.tone, count=o.count,
                 min_len=o.min_len, max_len=o.max_len, target_len=o.target_len,
@@ -184,7 +194,7 @@ class Project:
         todo = [c for c in clips if force or not c.copy or c.copy_sig != self.copy_sig(c)]
         if not todo:
             return
-        log(f"writing post copy for {len(todo)} clip(s)")
+        self.note(f"writing post copy for {len(todo)} clip(s)")
         write_copy(todo, self.transcript, brief=o.brief, tone=o.tone, model=o.model, extra=o.copy_extra)
         with self.lock:
             for c in todo:

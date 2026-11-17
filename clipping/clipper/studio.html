@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clip Studio</title>
+<style>
+:root {
+  --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --line: #2a2f3a;
+  --text: #e8eaf0; --muted: #9aa3b2; --accent: #ffd400; --accent-ink: #1a1500;
+  --ok: #37d67a; --bad: #ff5d6c; --warn: #ffb547; --clip: rgba(255, 212, 0, .16);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; }
+a { color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; cursor: pointer; white-space: nowrap; }
+button:hover { border-color: #3a4150; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button.ok { border-color: var(--ok); color: var(--ok); }
+button.bad { border-color: var(--bad); color: var(--bad); }
+button.on.ok { background: var(--ok); color: #04210f; }
+button.on.bad { background: var(--bad); color: #2a0006; }
+button.ghost { background: none; border-color: transparent; color: var(--muted); }
+button:disabled { opacity: .45; cursor: default; }
+input, select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; width: 100%; }
+input[type=checkbox] { width: auto; }
+textarea { resize: vertical; min-height: 70px; line-height: 1.45; }
+label { display: block; color: var(--muted); font-size: 12px; margin: 10px 0 4px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+header { position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center; padding: 10px 16px; background: rgba(15,17,21,.94); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); min-height: 52px; }
+header .brand { font-weight: 700; text-decoration: none; }
+header .crumb { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+main { padding: 16px; max-width: 1500px; margin: 0 auto; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.spacer { flex: 1; }
+.muted { color: var(--muted); }
+.hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.chip { font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.chip.ok { color: var(--ok); border-color: var(--ok); }
+.chip.warn { color: var(--warn); border-color: var(--warn); }
+.chip.bad { color: var(--bad); border-color: var(--bad); }
+.chip.run { color: var(--accent); border-color: var(--accent); }
+.grid { display: grid; gap: 12px; }
+.toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--line); padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 20; }
+.toast.show { opacity: 1; }
+.err { color: var(--bad); font-size: 12px; white-space: pre-wrap; }
+
+/* projects */
+.pgrid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.pcard { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; cursor: pointer; text-decoration: none; display: block; }
+.pcard:hover { border-color: #3a4150; }
+.pcard .n { font-weight: 650; font-size: 16px; }
+.pcard .b { color: var(--muted); margin: 6px 0 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.6em; }
+.stats { display: flex; gap: 14px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+.stats b { color: var(--text); font-weight: 600; }
+
+/* project */
+.ptop { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 14px; align-items: start; }
+.drop { border: 2px dashed var(--line); border-radius: 10px; padding: 22px; text-align: center; color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s; }
+.drop.over { border-color: var(--accent); background: var(--clip); color: var(--text); }
+.srcs { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.src { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 10px; background: var(--panel-2); border-radius: 8px; min-width: 0; }
+.src .nm { flex-basis: 160px; }
+.src .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 4px; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+.tabs { display: flex; gap: 4px; margin: 18px 0 12px; flex-wrap: wrap; }
+.tabs button.on { border-color: var(--accent); color: var(--accent); }
+.cgrid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.ccard { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; cursor: pointer; text-decoration: none; display: flex; flex-direction: column; }
+.ccard:hover { border-color: #3a4150; }
+.ccard .th { aspect-ratio: 9/16; background: #000 center/cover no-repeat; position: relative; }
+.ccard .th .st { position: absolute; top: 6px; left: 6px; }
+.ccard .th .du { position: absolute; bottom: 6px; right: 6px; background: rgba(0,0,0,.7); padding: 1px 6px; border-radius: 4px; font-size: 11px; }
+.ccard .th .ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12px; text-align: center; padding: 10px; }
+.ccard .meta { padding: 8px 9px; display: flex; flex-direction: column; gap: 5px; }
+.ccard .t { font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ccard.rejected { opacity: .5; }
+.settings textarea { min-height: 96px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.tablewrap { overflow-x: auto; }
+
+/* clip editor */
+.ed { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 14px; align-items: start; }
+video.src { width: 100%; border-radius: 8px; background: #000; aspect-ratio: 16/9; }
+.timeline { position: relative; height: 32px; margin: 10px 0 6px; background: var(--panel-2); border-radius: 6px; cursor: pointer; overflow: hidden; }
+.timeline .range { position: absolute; top: 0; bottom: 0; background: var(--clip); border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+.timeline .head { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; }
+.timeline .lbl { position: absolute; bottom: 2px; font-size: 10px; color: var(--muted); }
+.trim { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.trim input { width: 90px; }
+.dur.bad { color: var(--warn); }
+.words { line-height: 1.9; max-height: 200px; overflow: auto; padding: 8px; background: var(--bg); border-radius: 8px; border: 1px solid var(--line); }
+.words span { cursor: pointer; padding: 1px 2px; border-radius: 4px; color: var(--muted); }
+.words span.in { color: var(--text); }
+.words span.now { background: var(--accent); color: var(--accent-ink); }
+.styles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.styles button.on { border-color: var(--accent); color: var(--accent); }
+.sec { margin-top: 14px; }
+.out video { width: 100%; max-height: 64vh; aspect-ratio: 9/16; background: #000; border-radius: 8px; display: block; }
+.empty { color: var(--muted); text-align: center; padding: 40px 10px; border: 1px dashed var(--line); border-radius: 8px; }
+.count { color: var(--muted); font-size: 11px; text-align: right; }
+.count.over { color: var(--bad); }
+.post { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-top: 8px; }
+.post .m4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.post .m4 input { padding: 5px 7px; }
+
+@media (max-width: 1100px) { .ed, .ptop { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 640px) {
+  main { padding: 12px 16px; }
+  .trim, .two { grid-template-columns: 1fr; }
+  .styles, .post .m4 { grid-template-columns: repeat(2, 1fr); }
+  .cgrid { grid-template-columns: repeat(2, 1fr); }
+  header { flex-wrap: wrap; }
+}
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="#/">Clip Studio</a>
+  <span class="crumb" id="crumb"></span>
+  <span class="spacer"></span>
+  <span id="hdr"></span>
+</header>
+<main id="app"></main>
+<div class="toast" id="toast"></div>
+<input type="file" id="filepick" accept="video/*" multiple hidden>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmt = (t) => { t = Math.max(0, t || 0); const m = Math.floor(t / 60), s = (t % 60).toFixed(1).padStart(4, "0"); return `${m}:${s}`; };
+const num = (n) => n == null ? "" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "K" : n.toLocaleString();
+const PLAT = { tiktok: "TikTok", youtube_shorts: "Shorts", instagram: "Reels", x: "X" };
+const METRICS = ["views", "likes", "comments", "shares"];
+let STYLES = {}, timer = null, saveT = null, uploads = {};
+
+function toast(m) { const t = $("toast"); t.textContent = m; t.classList.add("show"); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove("show"), 1800); }
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function poll(fn, ms) { clearInterval(timer); timer = setInterval(() => fn().catch(() => {}), ms); }
+
+// ---------------------------------------------------------------- router
+async function route() {
+  clearInterval(timer);
+  const h = location.hash.replace(/^#\/?/, "").split("/");
+  try {
+    if (h[0] === "p" && h[2] === "s" && h[4] === "c") await clipView(h[1], h[3], +h[5]);
+    else if (h[0] === "p" && h[1]) await projectView(h[1], h[2] || "clips");
+    else await homeView();
+  } catch (e) { $("app").innerHTML = `<div class="panel err">${esc(e.message)}</div>`; }
+}
+window.addEventListener("hashchange", route);
+
+// ---------------------------------------------------------------- home
+async function homeView() {
+  const d = await api("/api/projects");
+  STYLES = d.styles;
+  $("crumb").textContent = ""; $("hdr").innerHTML = "";
+  const app = $("app");
+  app.innerHTML = `<div class="row" style="margin-bottom:14px"><h1>Projects</h1><span class="spacer"></span>
+    <button class="primary" id="newp">+ New project</button></div>
+    <div id="newform"></div>
+    <div class="grid pgrid">${d.projects.map((p) => `
+      <a class="pcard" href="#/p/${p.id}">
+        <div class="row"><span class="n">${esc(p.name)}</span><span class="spacer"></span>${p.busy ? `<span class="chip run">processing</span>` : ""}</div>
+        <div class="b">${esc(p.brief) || '<span class="muted">No prompt yet</span>'}</div>
+        <div class="stats"><span><b>${p.sources}</b> sources</span><span><b>${p.clips}</b> clips</span><span><b>${p.posted}</b> posted</span><span><b>${num(p.views)}</b> views</span></div>
+      </a>`).join("") || `<div class="muted">No projects yet. Create one per show, topic or creator.</div>`}
+    </div><p class="hint">Workspace: ${esc(d.workspace)}</p>`;
+  $("newp").onclick = () => {
+    $("newform").innerHTML = `<div class="panel settings" style="margin-bottom:14px">${settingsForm({ name: "", brief: "", tone: "", style: "auto", count: 5, min_len: 15, max_len: 60, hook_mode: "intro", copy_notes: "", auto_render: true, two_shot: "cut", crosstalk: true, whisper_model: "small" })}
+      <div class="row sec"><button class="primary" id="create">Create project</button><button class="ghost" id="cancel">Cancel</button></div></div>`;
+    $("cancel").onclick = () => ($("newform").innerHTML = "");
+    $("create").onclick = async () => { const p = await api("/api/projects", readSettings()); location.hash = `#/p/${p.id}`; };
+    $("s_name").focus();
+  };
+  poll(async () => { if (!$("newform").innerHTML) await homeView(); }, 5000);
+}
+
+function settingsForm(p) {
+  const opt = (v, cur, label) => `<option value="${v}" ${String(v) === String(cur) ? "selected" : ""}>${label || v}</option>`;
+  return `<label>Project name</label><input id="s_name" value="${esc(p.name)}" placeholder="e.g. The Founder Pod, or AI news clips">
+    <label>Prompt: what to clip, for whom, what angle</label><textarea id="s_brief" placeholder="e.g. Contrarian takes on hiring and fundraising for first-time founders. Prioritise heated disagreements and specific numbers.">${esc(p.brief)}</textarea>
+    <div class="two"><div><label>Tone</label><input id="s_tone" value="${esc(p.tone)}" placeholder="direct, a bit funny"></div>
+    <div><label>Caption style</label><select id="s_style">${opt("auto", p.style, "auto (Claude picks per clip)")}${Object.keys(STYLES).map((k) => opt(k, p.style)).join("")}</select></div></div>
+    <div class="two"><div><label>Clips per source</label><input id="s_count" type="number" min="1" max="30" value="${p.count}"></div>
+    <div class="two"><div><label>Min s</label><input id="s_min" type="number" value="${p.min_len}"></div><div><label>Max s</label><input id="s_max" type="number" value="${p.max_len}"></div></div></div>
+    <label>Notes for post copy (handles, CTA, links)</label><input id="s_notes" value="${esc(p.copy_notes)}" placeholder="e.g. Mention the full episode is on Spotify">
+    <div class="two"><div><label>Hook headline</label><select id="s_hook">${opt("intro", p.hook_mode, "first 3.5s")}${opt("full", p.hook_mode, "whole clip")}${opt("off", p.hook_mode, "off")}</select></div>
+    <div><label>Two people far apart</label><select id="s_two">${opt("cut", p.two_shot, "cut to speaker")}${opt("stack", p.two_shot, "split screen")}</select></div></div>
+    <div class="row" style="margin-top:10px;gap:16px">
+      <label class="row" style="margin:0"><input type="checkbox" id="s_auto" ${p.auto_render ? "checked" : ""}> Render clips automatically</label>
+      <label class="row" style="margin:0"><input type="checkbox" id="s_cross" ${p.crosstalk ? "checked" : ""}> Split screen on crosstalk</label></div>
+    <label>Transcription model</label><select id="s_whisper">${["small", "medium", "large-v3-turbo", "large-v3"].map((m) => opt(m, p.whisper_model)).join("")}</select>`;
+}
+function readSettings() {
+  return { name: $("s_name").value, brief: $("s_brief").value, tone: $("s_tone").value, style: $("s_style").value,
+    count: +$("s_count").value, min_len: +$("s_min").value, max_len: +$("s_max").value, copy_notes: $("s_notes").value,
+    hook_mode: $("s_hook").value, two_shot: $("s_two").value, auto_render: $("s_auto").checked,
+    crosstalk: $("s_cross").checked, whisper_model: $("s_whisper").value };
+}
+
+// ---------------------------------------------------------------- project
+let PV = { filter: "all" };
+async function projectView(pid, tab) {
+  if (!Object.keys(STYLES).length) STYLES = (await api("/api/projects")).styles;
+  PV.pid = pid; PV.tab = tab;
+  const app = $("app");
+  app.innerHTML = `<div class="ptop">
+      <div class="panel">
+        <div class="drop" id="drop"><b>Drop videos here</b> or click to choose files<div class="hint">Each video is transcribed, clipped with this project's prompt and rendered in the background.</div></div>
+        <div class="row sec"><input id="addpath" placeholder="Or paste a YouTube URL, or a file path on this Mac (used in place, not copied)"><button id="addbtn">Add</button></div>
+        <div class="srcs" id="srcs"></div>
+      </div>
+      <div class="panel" id="prompt"></div>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div id="body"></div>`;
+  const drop = $("drop");
+  drop.onclick = () => $("filepick").click();
+  $("filepick").onchange = (e) => { [...e.target.files].forEach((f) => upload(pid, f)); e.target.value = ""; };
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); [...e.dataTransfer.files].forEach((f) => upload(pid, f)); };
+  $("addbtn").onclick = async () => {
+    const v = $("addpath").value.trim(); if (!v) return;
+    try { await api(`/api/p/${pid}/add`, /^https?:\/\//.test(v) ? { url: v } : { path: v }); $("addpath").value = ""; refreshProject(); }
+    catch (e) { toast(e.message); }
+  };
+  await refreshProject(true);
+  poll(() => refreshProject(false), 2000);
+}
+
+function upload(pid, file) {
+  const key = Math.random().toString(36).slice(2);
+  uploads[key] = { name: file.name, pct: 0 };
+  const x = new XMLHttpRequest();
+  x.open("POST", `/api/p/${pid}/upload`);
+  x.setRequestHeader("X-Filename", encodeURIComponent(file.name));
+  x.upload.onprogress = (e) => { if (e.lengthComputable) uploads[key].pct = e.loaded / e.total; drawSources(); };
+  x.onload = () => { delete uploads[key]; if (x.status >= 400) toast(JSON.parse(x.responseText || "{}").error || "Upload failed"); refreshProject(); };
+  x.onerror = () => { delete uploads[key]; toast("Upload failed"); drawSources(); };
+  x.send(file);
+  drawSources();
+}
+
+async function refreshProject(full) {
+  const d = await api(`/api/p/${PV.pid}`);
+  PV.d = d;
+  const p = d.project;
+  $("crumb").textContent = p.name;
+  $("hdr").innerHTML = "";
+  drawSources();
+  const pr = $("prompt");
+  if (full || !PV.editing) {
+    pr.innerHTML = PV.editing ? `<div class="settings">${settingsForm(p)}<div class="row sec"><button class="primary" id="savep">Save</button><button class="ghost" id="cancelp">Cancel</button><span class="spacer"></span><button class="bad" id="delp">Delete project</button></div>
+      <div class="hint">New settings apply to sources you add or re-run from now on. Use "Find again" on a source to re-clip it.</div></div>`
+      : `<div class="row"><h2 style="margin:0">Prompt</h2><span class="spacer"></span><button id="editp">Edit</button></div>
+        <p style="white-space:pre-wrap;margin:8px 0">${esc(p.brief) || '<span class="muted">No prompt yet. Add one so Claude knows what to look for.</span>'}</p>
+        <div class="stats"><span>Tone: <b>${esc(p.tone) || "-"}</b></span><span>Style: <b>${p.style}</b></span><span><b>${p.count}</b> clips per source</span><span><b>${p.min_len}-${p.max_len}s</b></span></div>
+        ${p.copy_notes ? `<div class="hint">Copy notes: ${esc(p.copy_notes)}</div>` : ""}`;
+    if (PV.editing) {
+      $("savep").onclick = async () => { await api(`/api/p/${p.id}`, readSettings()); PV.editing = false; toast("Saved"); refreshProject(true); };
+      $("cancelp").onclick = () => { PV.editing = false; refreshProject(true); };
+      $("delp").onclick = async () => { if (confirm(`Delete "${p.name}" and all its clips? This cannot be undone.`)) { await api(`/api/p/${p.id}/delete`, {}); location.hash = "#/"; } };
+    } else $("editp").onclick = () => { PV.editing = true; refreshProject(true); };
+  }
+  const clips = d.clips;
+  const counts = { all: clips.length, review: clips.filter((c) => c.status === "pending").length,
+    approved: clips.filter((c) => c.status === "approved").length, posted: clips.filter((c) => Object.keys(c.posts || {}).length).length };
+  $("tabs").innerHTML = [["all", "All"], ["review", "To review"], ["approved", "Approved"], ["posted", "Posted"]].map(([k, l]) =>
+    `<button data-f="${k}" class="${PV.tab === "clips" && PV.filter === k ? "on" : ""}">${l} (${counts[k]})</button>`).join("") +
+    `<span class="spacer"></span><button data-perf class="${PV.tab === "performance" ? "on" : ""}">Performance</button>`;
+  $("tabs").querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { PV.filter = b.dataset.f; location.hash = `#/p/${PV.pid}`; if (PV.tab === "clips") refreshProject(); }));
+  $("tabs").querySelector("[data-perf]").onclick = () => (location.hash = `#/p/${PV.pid}/performance`);
+  if (PV.tab === "performance") drawPerformance(clips); else drawClips(clips);
+}
+
+function drawSources() {
+  const el = $("srcs"); if (!el || !PV.d) return;
+  const ups = Object.values(uploads).map((u) => `<div class="src"><span class="nm">${esc(u.name)}</span><span class="chip run">uploading ${Math.round(u.pct * 100)}%</span></div>`);
+  const rows = PV.d.sources.map((s) => {
+    const st = s.status === "ready" ? `<span class="chip ok">${s.clips} clips</span>` : s.status === "error" ? `<span class="chip bad">error</span>`
+      : `<span class="chip run">${esc(s.stage || s.status)}</span>`;
+    const pct = (s.stage || "").match(/(\d+)%/);
+    return `<div class="src" title="${esc(s.error)}"><div class="nm">${esc(s.name)}${s.duration ? ` <span class="muted">· ${fmt(s.duration)}</span>` : ""}${s.linked ? ' <span class="muted">· linked</span>' : ""}
+        ${pct ? `<div class="bar"><i style="width:${pct[1]}%"></i></div>` : ""}${s.status === "error" ? `<div class="err">${esc(s.error.split("\n").slice(-2).join(" "))}</div>` : ""}</div>
+      ${st}
+      ${s.status === "ready" || s.status === "error" ? `<button class="ghost" data-re="${s.id}" title="Ask Claude for a fresh set (keeps approved and posted clips)">Find again</button>` : ""}
+      <button class="ghost" data-del="${s.id}" title="Remove source and its clips">&times;</button></div>`;
+  });
+  el.innerHTML = ups.join("") + rows.join("");
+  el.querySelectorAll("[data-re]").forEach((b) => (b.onclick = async () => { await api(`/api/p/${PV.pid}/s/${b.dataset.re}/reprocess`, { reselect: true }); toast("Finding clips again"); refreshProject(); }));
+  el.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => { if (confirm("Remove this source and all its clips?")) { await api(`/api/p/${PV.pid}/s/${b.dataset.del}/delete`, {}); refreshProject(); } }));
+}
+
+function drawClips(clips) {
+  const f = PV.filter;
+  const list = clips.filter((c) => f === "all" || (f === "review" && c.status === "pending") || (f === "approved" && c.status === "approved") || (f === "posted" && Object.keys(c.posts || {}).length))
+    .sort((a, b) => b.score - a.score);
+  $("body").innerHTML = list.length ? `<div class="grid cgrid">${list.map((c) => {
+    const posted = Object.keys(c.posts || {});
+    const views = posted.reduce((n, k) => n + (c.posts[k].views || 0), 0);
+    const job = c.job && (c.job.state === "running" || c.job.state === "queued");
+    const st = c.status === "approved" ? '<span class="chip ok st">approved</span>' : c.status === "rejected" ? '<span class="chip bad st">rejected</span>' : "";
+    return `<a class="ccard ${c.status}" href="#/p/${c.pid}/s/${c.sid}/c/${c.index}">
+      <div class="th" style="${c.thumb ? `background-image:url('${c.thumb}?v=${c.render_sig}')` : ""}">${c.thumb ? "" : `<div class="ph">${job ? "rendering..." : "not rendered"}</div>`}${st}<span class="du">${c.duration.toFixed(0)}s</span></div>
+      <div class="meta"><div class="t">${esc(c.title)}</div>
+        <div class="row" style="gap:5px"><span class="chip">${c.style}</span>${c.score ? `<span class="chip">${c.score}</span>` : ""}${c.outdated ? '<span class="chip warn">changed</span>' : ""}</div>
+        ${posted.length ? `<div class="row" style="gap:5px">${posted.map((k) => `<span class="chip ok">${PLAT[k]}</span>`).join("")}${views ? `<span class="muted" style="font-size:12px">${num(views)} views</span>` : ""}</div>` : ""}
+      </div></a>`;
+  }).join("")}</div>` : `<div class="muted">${clips.length ? "Nothing in this view." : "No clips yet. Drop a video above."}</div>`;
+}
+
+function drawPerformance(clips) {
+  const rows = [];
+  const tot = Object.fromEntries(Object.keys(PLAT).map((k) => [k, { posts: 0, views: 0, likes: 0, comments: 0, shares: 0 }]));
+  for (const c of clips) for (const [k, p] of Object.entries(c.posts || {})) {
+    rows.push({ c, k, p });
+    tot[k].posts++; for (const m of METRICS) tot[k][m] += p[m] || 0;
+  }
+  rows.sort((a, b) => (b.p.views || 0) - (a.p.views || 0));
+  const er = (p) => p.views ? (((p.likes || 0) + (p.comments || 0) + (p.shares || 0)) / p.views * 100).toFixed(1) + "%" : "";
+  $("body").innerHTML = `<div class="panel"><h2>By platform</h2><div class="tablewrap"><table><tr><th>Platform</th><th class="num">Posts</th>${METRICS.map((m) => `<th class="num">${m}</th>`).join("")}<th class="num">Avg views</th><th class="num">Engagement</th></tr>
+    ${Object.entries(tot).map(([k, t]) => `<tr><td>${PLAT[k]}</td><td class="num">${t.posts}</td>${METRICS.map((m) => `<td class="num">${num(t[m])}</td>`).join("")}<td class="num">${t.posts ? num(Math.round(t.views / t.posts)) : ""}</td><td class="num">${er(t)}</td></tr>`).join("")}</table></div></div>
+    <div class="panel sec"><h2>Posts, best first</h2>${rows.length ? `<div class="tablewrap"><table><tr><th>Clip</th><th>Platform</th><th>Posted</th><th>Style</th><th class="num">Length</th>${METRICS.map((m) => `<th class="num">${m}</th>`).join("")}<th class="num">Eng.</th><th>Updated</th></tr>
+    ${rows.map(({ c, k, p }) => `<tr><td><a href="#/p/${c.pid}/s/${c.sid}/c/${c.index}">${esc(c.title)}</a>${p.url ? ` <a href="${esc(p.url)}" target="_blank" rel="noopener" class="muted">&#8599;</a>` : ""}</td><td>${PLAT[k]}</td><td>${esc(p.posted_at || "")}</td><td>${c.style}</td><td class="num">${c.duration.toFixed(0)}s</td>${METRICS.map((m) => `<td class="num">${num(p[m])}</td>`).join("")}<td class="num">${er(p)}</td><td class="muted">${esc(p.updated || "")}</td></tr>`).join("")}</table></div>`
+    : '<div class="muted">Nothing posted yet. Open a clip, post it, then log the link and numbers under "Posted to".</div>'}
+    <div class="hint">Numbers are what you enter on each clip. Update them now and then; each day's values are kept as history.</div></div>`;
+}
+
+// ---------------------------------------------------------------- clip editor
+let CV = {};
+async function clipView(pid, sid, idx) {
+  if (!Object.keys(STYLES).length) STYLES = (await api("/api/projects")).styles;
+  CV = { pid, sid, idx, wordsKey: "", stopAt: null, copyTab: "tiktok" };
+  $("app").innerHTML = `<div class="ed">
+    <div class="panel">
+      <div class="row" style="margin-bottom:10px"><a href="#/p/${pid}" class="muted">&larr; Back to project</a><span class="spacer"></span>
+        <button id="prev">&larr; Prev</button><button id="next">Next &rarr;</button></div>
+      <video class="src" id="player" controls preload="metadata"></video>
+      <div class="hint" id="prevnote"></div>
+      <div class="timeline" id="timeline"><div class="range" id="tlrange"></div><div class="head" id="tlhead"></div><span class="lbl" id="tlL" style="left:4px"></span><span class="lbl" id="tlR" style="right:4px"></span></div>
+      <div class="row"><button id="playclip">&#9654; Play clip</button><button id="playfrom">From 3s before</button><span class="dur" id="dur"></span>
+        <span class="spacer"></span><button class="ok" id="approve">Approve</button><button class="bad" id="reject">Reject</button></div>
+      <div class="trim sec">
+        <div><label>Start (s)</label><div class="row"><button data-n="start:-1">-1</button><button data-n="start:-0.25">-.25</button><input id="start" type="number" step="0.05"><button data-n="start:0.25">+.25</button><button data-n="start:1">+1</button><button id="setstart">&#8676; playhead</button></div></div>
+        <div><label>End (s)</label><div class="row"><button data-n="end:-1">-1</button><button data-n="end:-0.25">-.25</button><input id="end" type="number" step="0.05"><button data-n="end:0.25">+.25</button><button data-n="end:1">+1</button><button id="setend">playhead &#8677;</button></div></div>
+      </div>
+      <div class="sec"><h2>Transcript</h2><div class="words" id="words"></div>
+        <div class="hint">Click a word to jump. Alt/Option-click: start here. Shift-click: end after this word.</div></div>
+      <div class="sec two"><div><label>Title</label><input id="title"></div><div><label>On-screen hook</label><input id="hook"></div></div>
+      <div class="sec"><h2>Caption style</h2><div class="styles" id="styles"></div><div class="hint" id="styledesc"></div></div>
+      <div class="hint" id="why" style="font-style:italic"></div>
+      <div class="row sec"><button class="primary" id="render">Render</button><button id="addclip">+ New clip at playhead</button><span class="spacer"></span><button class="bad" id="del">Delete clip</button></div>
+      <div class="err" id="err"></div>
+    </div>
+    <div>
+      <div class="panel out"><div class="row" style="margin-bottom:8px"><h2 style="margin:0">Output</h2><span class="spacer"></span><a id="dl" class="chip" style="text-decoration:none" hidden>Download</a></div><div id="outvideo"></div></div>
+      <div class="panel sec" id="copybox"></div>
+      <div class="panel sec" id="posts"></div>
+    </div></div>`;
+  const P = $("player");
+  P.addEventListener("timeupdate", () => { if (CV.stopAt !== null && P.currentTime >= CV.stopAt) { P.pause(); CV.stopAt = null; } drawTimeline(); });
+  $("playclip").onclick = () => { seek(CV.c.start); CV.stopAt = CV.c.end; P.play(); };
+  $("playfrom").onclick = () => { seek(CV.c.start - 3); CV.stopAt = CV.c.end; P.play(); };
+  $("timeline").onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); seek(+e.currentTarget.dataset.a + (e.clientX - r.left) / r.width * +e.currentTarget.dataset.span); };
+  $("setstart").onclick = () => save({ start: P.currentTime });
+  $("setend").onclick = () => save({ end: P.currentTime });
+  document.querySelectorAll("[data-n]").forEach((b) => (b.onclick = () => { const [k, d] = b.dataset.n.split(":"); save({ [k]: +(CV.c[k] + +d).toFixed(3) }); }));
+  for (const k of ["start", "end"]) $(k).onchange = () => save({ [k]: +$(k).value });
+  for (const k of ["title", "hook"]) $(k).oninput = () => { clearTimeout(saveT); saveT = setTimeout(() => save({ [k]: $(k).value }, true), 500); };
+  $("approve").onclick = () => save({ status: CV.c.status === "approved" ? "pending" : "approved" });
+  $("reject").onclick = () => save({ status: CV.c.status === "rejected" ? "pending" : "rejected" });
+  $("render").onclick = async () => { await api(base() + `/c/${idx}`, { status: "approved" }); await api(base() + "/render", { indices: [idx] }); loadClip(); };
+  $("del").onclick = async () => { if (confirm(`Delete "${CV.c.title}"?`)) { await api(base() + `/c/${idx}/delete`, {}); location.hash = `#/p/${pid}`; } };
+  $("addclip").onclick = async () => { const t = P.currentTime || 0; const r = await api(base() + "/newclip", { start: t, end: Math.min(CV.src.duration, t + 30) }); location.hash = `#/p/${pid}/s/${sid}/c/${r.index}`; };
+  const go = (d) => { const s = CV.sib, i = s.indexOf(idx); if (s[i + d] !== undefined) location.hash = `#/p/${pid}/s/${sid}/c/${s[i + d]}`; };
+  $("prev").onclick = () => go(-1); $("next").onclick = () => go(1);
+  document.onkeydown = (e) => {
+    if (!location.hash.includes("/c/") || ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
+    if (e.key === " ") { e.preventDefault(); P.paused ? P.play() : P.pause(); }
+    if (e.key === "i") save({ start: P.currentTime }); if (e.key === "o") save({ end: P.currentTime });
+    if (e.key === "a") $("approve").click(); if (e.key === "x") $("reject").click();
+    if (e.key === "j") go(1); if (e.key === "k") go(-1);
+  };
+  await loadClip(true);
+  setTimeout(() => seek(CV.c.start), 300);
+  poll(() => loadClip(false), 1500);
+}
+const base = () => `/api/p/${CV.pid}/s/${CV.sid}`;
+const typingIn = (el) => el.contains(document.activeElement) && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
+function seek(t) { const p = $("player"); if (p && p.src) p.currentTime = Math.max(0, t); }
+
+async function loadClip(full) {
+  const d = await api(base() + `/c/${CV.idx}`);
+  const c = CV.c = d.clip; CV.src = d.source; CV.sib = d.siblings; CV.limits = d.limits;
+  $("crumb").innerHTML = `<a href="#/p/${CV.pid}">project</a> / ${esc(c.title)}`;
+  const P = $("player");
+  if (d.source.preview && !P.src) { P.src = d.source.preview; P.addEventListener("loadedmetadata", () => seek(c.start), { once: true }); }
+  $("prevnote").textContent = d.source.preview ? "" : "Preparing a browser-playable preview of the source...";
+  const act = document.activeElement;
+  for (const k of ["start", "end", "title", "hook"]) if (full || act !== $(k)) $(k).value = k === "start" || k === "end" ? c[k].toFixed(2) : c[k];
+  const dd = c.end - c.start, bad = dd < CV.limits.min || dd > CV.limits.max;
+  $("dur").textContent = `${dd.toFixed(1)}s${bad ? ` (target ${CV.limits.min}-${CV.limits.max}s)` : ""}`; $("dur").className = "dur" + (bad ? " bad" : "");
+  $("approve").classList.toggle("on", c.status === "approved"); $("reject").classList.toggle("on", c.status === "rejected");
+  $("why").textContent = c.rationale ? `Why this clip: ${c.rationale}` : "";
+  $("err").textContent = c.job && c.job.error ? c.job.error : "";
+  const busy = c.job && (c.job.state === "running" || c.job.state === "queued");
+  $("render").disabled = busy;
+  $("render").textContent = busy ? `Rendering: ${c.job.msg || "queued"}` : c.rendered ? (c.outdated ? "Re-render (changed)" : "Re-render") : "Render";
+  if (full) $("styles").innerHTML = Object.keys(STYLES).map((k) => `<button data-s="${k}">${k}</button>`).join("");
+  $("styles").querySelectorAll("[data-s]").forEach((b) => { b.classList.toggle("on", b.dataset.s === c.style); b.onclick = () => save({ style: b.dataset.s }); });
+  $("styledesc").textContent = STYLES[c.style] || "";
+  const key = `${c.start}:${c.end}`;
+  if (key !== CV.wordsKey) { CV.wordsKey = key; CV.words = await api(base() + `/words?start=${c.start - 8}&end=${c.end + 8}`); drawWords(); }
+  drawTimeline();
+  const ov = $("outvideo");
+  if (full || ov.dataset.v !== c.video) {
+    ov.dataset.v = c.video;
+    ov.innerHTML = c.rendered ? `<video controls playsinline src="${c.video}"></video>` : `<div class="empty">${busy ? "Rendering..." : "Not rendered yet."}</div>`;
+  }
+  const dl = $("dl"); dl.hidden = !c.rendered; if (c.rendered) dl.href = `/download/${CV.pid}/${CV.sid}/${c.file}`;
+  if (c.outdated && !$("outnote")) ov.insertAdjacentHTML("beforeend", '<div class="hint" id="outnote" style="color:var(--warn)">Edited since this render. Re-render to update.</div>');
+  if (!c.outdated && $("outnote")) $("outnote").remove();
+  drawCopy(full); drawPosts(full);
+}
+
+function drawWords() {
+  const c = CV.c, box = $("words"); box.innerHTML = "";
+  for (const [w, s, e] of CV.words) {
+    const sp = document.createElement("span"); sp.textContent = w; sp.dataset.s = s; sp.dataset.e = e;
+    if (e > c.start && s < c.end) sp.className = "in";
+    sp.onclick = (ev) => ev.altKey ? save({ start: Math.max(0, s - 0.08) }) : ev.shiftKey ? save({ end: e + 0.25 }) : seek(s);
+    box.append(sp, " ");
+  }
+}
+function drawTimeline() {
+  const c = CV.c; if (!c || !$("timeline")) return;
+  const pad = Math.max(10, (c.end - c.start) * 0.4), a = Math.max(0, c.start - pad), b = Math.min(CV.src.duration, c.end + pad), sp = b - a;
+  $("tlrange").style.left = `${(c.start - a) / sp * 100}%`; $("tlrange").style.width = `${(c.end - c.start) / sp * 100}%`;
+  $("tlL").textContent = fmt(a); $("tlR").textContent = fmt(b);
+  const t = $("player").currentTime; $("tlhead").style.left = `${Math.min(100, Math.max(0, (t - a) / sp * 100))}%`;
+  $("timeline").dataset.a = a; $("timeline").dataset.span = sp;
+  for (const s of $("words").children) s.classList.toggle("now", t >= +s.dataset.s && t < +s.dataset.e);
+}
+
+async function save(patch, quiet) {
+  Object.assign(CV.c, patch);
+  try { await api(base() + `/c/${CV.idx}`, patch); } catch (e) { toast(e.message); }
+  if (!quiet) await loadClip(false);
+}
+
+function drawCopy(full) {
+  const c = CV.c, cb = $("copybox");
+  if (!full && typingIn(cb)) return;
+  const sig = JSON.stringify([c.copy, CV.copyTab, c.copy_outdated]);
+  if (!full && cb.dataset.sig === sig) return;
+  cb.dataset.sig = sig;
+  if (!c.copy || !c.copy.tiktok) {
+    cb.innerHTML = `<h2>Post copy</h2><div class="hint">Written when the clip renders.</div><button class="sec" id="gen">Write copy now</button>`;
+    $("gen").onclick = () => api(base() + "/copy", { indices: [CV.idx] }).then(() => toast("Writing copy..."));
+    return;
+  }
+  const tab = CV.copyTab, p = c.copy[tab], tags = (a) => (a || []).join(" ");
+  const area = (f, l, v, max) => `<label>${l}</label><textarea data-f="${f}" ${max ? `data-max="${max}"` : ""}>${esc(v)}</textarea>${max ? `<div class="count" data-c="${f}"></div>` : ""}`;
+  let f = "";
+  if (tab === "tiktok") f = area("caption", "Caption", p.caption, 2200) + area("hashtags", "Hashtags", tags(p.hashtags));
+  if (tab === "youtube_shorts") f = area("title", "Title", p.title, 100) + area("description", "Description", p.description, 5000) + area("hashtags", "Hashtags", tags(p.hashtags));
+  if (tab === "instagram") f = area("caption", "Caption", p.caption, 2200) + area("hashtags", "Hashtags", tags(p.hashtags));
+  if (tab === "x") f = area("post", "Post", p.post, 280) + area("alt_post", "Alternative", p.alt_post, 280);
+  cb.innerHTML = `<h2>Post copy</h2><div class="row" style="gap:4px">${Object.entries(PLAT).map(([k, v]) => `<button data-t="${k}" class="${k === tab ? "primary" : ""}">${v}</button>`).join("")}</div>${f}
+    ${c.copy_outdated ? '<div class="hint" style="color:var(--warn)">The clip changed since this copy was written.</div>' : ""}
+    <div class="row sec"><button id="cpy">Copy for ${PLAT[tab]}</button><span class="spacer"></span><button class="ghost" id="regen">Rewrite</button></div>`;
+  cb.querySelectorAll("[data-t]").forEach((b) => (b.onclick = () => { CV.copyTab = b.dataset.t; drawCopy(false); }));
+  cb.querySelectorAll("textarea").forEach((t) => {
+    const upd = () => { const n = cb.querySelector(`[data-c="${t.dataset.f}"]`); if (n) { n.textContent = `${t.value.length}/${t.dataset.max}`; n.classList.toggle("over", t.value.length > +t.dataset.max); } };
+    upd();
+    t.oninput = () => { upd(); const copy = structuredClone(c.copy); copy[tab][t.dataset.f] = t.dataset.f === "hashtags" ? t.value.split(/\s+/).filter(Boolean) : t.value; c.copy = copy;
+      clearTimeout(saveT); saveT = setTimeout(() => api(base() + `/c/${CV.idx}`, { copy }).catch((e) => toast(e.message)), 500); };
+  });
+  $("cpy").onclick = () => { const q = c.copy[tab]; navigator.clipboard.writeText(tab === "x" ? q.post : tab === "youtube_shorts" ? `${q.title}\n\n${q.description}\n\n${tags(q.hashtags)}` : `${q.caption}\n\n${tags(q.hashtags)}`).then(() => toast("Copied")); };
+  $("regen").onclick = () => api(base() + "/copy", { indices: [CV.idx] }).then(() => toast("Rewriting..."));
+}
+
+function drawPosts(full) {
+  const c = CV.c, box = $("posts");
+  if (!full && typingIn(box)) return;
+  const sig = JSON.stringify(c.posts || {});
+  if (!full && box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  const posted = c.posts || {};
+  box.innerHTML = `<h2>Posted to</h2>${Object.entries(PLAT).map(([k, label]) => {
+    const p = posted[k];
+    if (!p) return `<div class="row" style="margin-top:6px"><span style="width:70px">${label}</span><button data-mark="${k}">Mark as posted</button></div>`;
+    return `<div class="post" data-p="${k}"><div class="row"><b>${label}</b><span class="muted">${esc(p.posted_at || "")}</span><span class="spacer"></span>
+      ${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener" class="chip">open &#8599;</a>` : ""}<button class="ghost" data-unmark="${k}" title="Remove">&times;</button></div>
+      <input data-k="url" placeholder="Post link" value="${esc(p.url || "")}" style="margin-top:6px">
+      <div class="m4" style="margin-top:6px">${METRICS.map((m) => `<div><label style="margin:0 0 2px">${m}</label><input data-k="${m}" inputmode="numeric" value="${p[m] ?? ""}"></div>`).join("")}</div>
+      ${p.updated ? `<div class="hint">Numbers updated ${esc(p.updated)}</div>` : ""}</div>`;
+  }).join("")}<div class="hint">Post from the downloaded file, then log it here to track it under Performance.</div>`;
+  box.querySelectorAll("[data-mark]").forEach((b) => (b.onclick = () => save({ post: { platform: b.dataset.mark } })));
+  box.querySelectorAll("[data-unmark]").forEach((b) => (b.onclick = () => { if (confirm("Remove this post record?")) save({ post: { platform: b.dataset.unmark, remove: true } }); }));
+  box.querySelectorAll("[data-p] input").forEach((inp) => (inp.onchange = () => {
+    const k = inp.closest("[data-p]").dataset.p;
+    save({ post: { platform: k, [inp.dataset.k]: inp.value } });
+  }));
+}
+
+route();
+</script>
+</body>
+</html>

@@ -113,3 +113,18 @@ def test_choose_focus_switches_with_hysteresis():
     assert focus[-1] == 1
     assert np.sum(np.diff(focus) != 0) == 1
     assert 95 <= np.argmax(focus == 1) <= 106
+
+
+def test_studio_workspace_projects_and_posts(tmp_path):
+    from clipper.studio import Workspace
+    ws = Workspace(tmp_path)
+    p = ws.create_project({"name": "Show", "brief": "hot takes", "count": 3})
+    assert ws.project(p.id).brief == "hot takes"
+    p2 = ws.update_project(p.id, {"min_len": 40, "max_len": 30, "style": "nope"})
+    assert p2.max_len > p2.min_len and p2.style == "auto"
+    c = Clip(0, 20, "t")
+    Workspace._update_post(c, {"platform": "tiktok", "url": "https://x", "views": "1,200"})
+    assert c.posts["tiktok"]["views"] == 1200 and c.posts["tiktok"]["history"]
+    Workspace._update_post(c, {"platform": "tiktok", "remove": True})
+    assert c.posts == {}
+    assert [s["name"] for s in ws.summary()] == ["Show"]

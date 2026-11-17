@@ -49,7 +49,7 @@ class Transcript:
 
 
 def transcribe(audio: Path, model_size: str = "small", language: str | None = None,
-               device: str = "auto") -> Transcript:
+               device: str = "auto", progress=None) -> Transcript:
     """Run faster-whisper with word timestamps.
 
     model_size: tiny | base | small | medium | large-v3 | large-v3-turbo | distil-large-v3
@@ -92,6 +92,8 @@ def transcribe(audio: Path, model_size: str = "small", language: str | None = No
                 text=seg.text.strip(), first_word=first, last_word=len(words) - 1,
             ))
         print(f"\r  transcribed {seg.end / 60:6.1f} min", end="", flush=True)
+        if progress:
+            progress(f"transcribing {seg.end / max(info.duration, 1):.0%}")
     print()
     return Transcript(language=info.language, words=words, segments=segments)
 

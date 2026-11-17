@@ -26,10 +26,25 @@ export ANTHROPIC_API_KEY=...   # or: ant auth login
 
 The first run downloads the Whisper model (`small` is about 500 MB). The transcript is cached, so later runs on the same file skip that step.
 
+## Clip Studio (the main way to use it)
+
+```bash
+clipper studio            # opens http://127.0.0.1:8765, workspace in ~/ClipStudio
+```
+
+- **Projects:** one per show, topic or creator. Each has its own prompt, tone, caption style, clip count and length, and notes for the post copy.
+- **Adding sources:** drop videos onto a project (they're copied into the workspace), paste a file path to use a file in place without copying, or paste a YouTube URL. Each source is transcribed, clipped with the project's prompt and rendered in the background, with progress shown. "Find again" asks Claude for a fresh set and keeps clips you approved or posted.
+- **Clip grid:** filter by To review, Approved or Posted. Open a clip to trim it, change the hook, title or caption style, re-render, download the MP4, and edit or copy the post text for each platform.
+- **Posted to:** after posting a clip yourself, log the link and its views, likes, comments and shares for each platform. The project's **Performance** tab totals them per platform, ranks posts by views and shows engagement rate. Each day's numbers are kept as history.
+
+Everything lives in the workspace folder as plain files: `projects/<id>/project.json`, and `projects/<id>/sources/<id>/` holding the clips, `clips.json` and `posts.md`. Restarting the studio resumes any source that was mid-processing.
+
+The command-line flow below still works for one-off jobs and scripting.
+
 ## Usage
 
 ```bash
-# Pick clips, then review them in the browser before rendering (recommended)
+# Pick clips, then review them in the browser before rendering
 clipper podcast.mp4 -b "Contrarian takes on hiring for early-stage founders" -t "direct, funny" -n 8 --review
 
 # Fully automatic

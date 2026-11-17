@@ -28,6 +28,7 @@ class Clip:
     render_sig: str = ""      # settings the current file was rendered with
     copy_sig: str = ""        # clip text the current copy was written for
     layout: str = ""          # human-readable reframing summary
+    posts: dict = field(default_factory=dict)  # platform -> {url, posted_at, views, likes, ...}
 
     @property
     def duration(self) -> float:

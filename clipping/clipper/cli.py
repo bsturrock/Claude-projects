@@ -79,7 +79,27 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def studio_main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="clipper studio",
+                                description="Open Clip Studio, the local web workshop for projects and clips.")
+    p.add_argument("--home", type=Path, default=Path("~/ClipStudio"),
+                   help="Workspace folder for projects, sources and clips (default ~/ClipStudio)")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-browser", action="store_true", help="Don't open a browser tab")
+    a = p.parse_args(argv)
+    from .studio import serve
+    try:
+        serve(a.home, port=a.port, open_browser=not a.no_browser)
+    except MediaError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "studio":
+        return studio_main(argv[1:])
     a = build_parser().parse_args(argv)
     if a.min_len >= a.max_len:
         print("--min must be less than --max", file=sys.stderr)
