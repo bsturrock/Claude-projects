@@ -123,8 +123,35 @@ def test_studio_workspace_projects_and_posts(tmp_path):
     p2 = ws.update_project(p.id, {"min_len": 40, "max_len": 30, "style": "nope"})
     assert p2.max_len > p2.min_len and p2.style == "auto"
     c = Clip(0, 20, "t")
-    Workspace._update_post(c, {"platform": "tiktok", "url": "https://x", "views": "1,200"})
-    assert c.posts["tiktok"]["views"] == 1200 and c.posts["tiktok"]["history"]
+    Workspace._update_post(c, {"platform": "tiktok", "url": "https://x"})
+    assert c.posts["tiktok"]["url"] == "https://x" and c.posts["tiktok"]["posted_at"]
     Workspace._update_post(c, {"platform": "tiktok", "remove": True})
     assert c.posts == {}
     assert [s["name"] for s in ws.summary()] == ["Show"]
+
+
+def test_refine_ends_on_sentence_even_past_max():
+    # one long sentence that runs past max: the clip should finish it rather than cut mid-sentence
+    words, t = [], 0.0
+    for i in range(140):
+        w = f"w{i}" + ("." if i in (30, 120) else "")
+        words.append(Word(w, round(t, 3), round(t + 0.3, 3)))
+        t += 0.4
+    tr = Transcript("en", words, resegment(words))
+    c = refine(Clip(0.0, 40.0, "x"), tr, 15, 40)
+    last = [w for w in words if w.end <= c.end][-1]
+    assert last.text.endswith(".")
+
+
+def test_tighten_keeps_short_pauses_and_spaces_cuts():
+    from clipper.edit import build_pieces
+    words, t = [], 0.0
+    for i in range(60):
+        words.append(Word(f"w{i}", round(t, 3), round(t + 0.25, 3)))
+        t += 0.25 + (0.5 if i % 3 else 0.2) + (1.5 if i % 10 == 9 else 0)  # 0.2-0.5 s gaps, 2 s pause every 10 words
+    pieces = build_pieces([(0.0, t)], words, 30, tighten=True)
+    assert all(p.dur >= 2.0 for p in pieces[:-1])
+    assert all(p.zoom == 1.0 for p in pieces)
+    # short (<0.8 s) pauses are never cut
+    cut_gaps = [pieces[i + 1].src_start - pieces[i].src_end for i in range(len(pieces) - 1)]
+    assert all(g > 0.3 for g in cut_gaps)

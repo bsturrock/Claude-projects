@@ -12,13 +12,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import media
-from .captions import DEFAULT_STYLE, PRESETS, build_ass, build_srt, get_style
+from .captions import DEFAULT_STYLE, FX_STYLES, PRESETS, build_ass, build_srt, get_style
 from .copywriter import format_post_md, write_copy
 from .llm import DEFAULT_MODEL
 from .reframe import Plan, Shot, analyze
+from .edit import build_pieces, map_words, total_duration
 from .render import render_clip, thumbnail
 from .selection import Clip, clip_from_dict, dedupe, find_moments, load_manual, refine
-from .transcript import Transcript, Word, resegment, transcribe
+from .transcript import Transcript, Word, audio_cues, resegment, transcribe
 
 
 @dataclass
@@ -29,7 +30,7 @@ class Options:
     tone: str = ""
     count: int = 5
     min_len: float = 15.0
-    max_len: float = 60.0
+    max_len: float = 90.0
     target_len: float | None = None
     style: str = "auto"  # "auto" = Claude picks per clip, or a preset name to force
     style_overrides: dict = field(default_factory=dict)
@@ -54,6 +55,16 @@ class Options:
     reselect: bool = False
     port: int = 8765
     out_override: Path | None = None  # studio: exact output folder for this source
+    vocabulary: list = field(default_factory=list)  # names/terms to spell right
+    tighten: bool = False         # cut silences + filler words, punch-in on cuts
+    audio_clean: bool = False     # denoise, de-ess, compress voices
+    brand: str = ""               # channel brand id for the end card ("" = no end card)
+    mask_profanity: bool = False
+    economy: bool = False         # Claude Batch API: half price, slower
+    encoder: str = "auto"         # auto | videotoolbox | x264
+    parallel: int = 2             # clips rendered at once
+    framing: str = "auto"         # auto | tight | medium | wide
+    examples: list = field(default_factory=list)  # rated past clips fed to selection
 
 
 def log(msg: str) -> None:
@@ -120,21 +131,44 @@ class Project:
         if o.transcript_path:
             self.transcript = load_any_transcript(o.transcript_path)
         else:
-            cache = self.work / f"transcript-{_file_key(src)}-{o.whisper_model}.json"
+            vkey = hashlib.sha1("|".join(o.vocabulary).encode()).hexdigest()[:6] if o.vocabulary else "nv"
+            cache = self.work / f"transcript-{_file_key(src)}-{o.whisper_model}-{vkey}.json"
+            legacy = self.work / f"transcript-{_file_key(src)}-{o.whisper_model}.json"
+            if not cache.exists() and legacy.exists() and not o.vocabulary:
+                cache = legacy
             if cache.exists():
                 log("using cached transcript")
                 self.transcript = Transcript.load(cache)
             else:
                 if not self.info.has_audio:
                     raise media.MediaError("Source has no audio track to transcribe.")
-                self.note(f"extracting audio")
+                self.note("extracting audio")
                 wav = media.extract_audio(src, self.work / "audio.wav")
                 self.note(f"transcribing ({o.whisper_model})")
                 self.transcript = transcribe(wav, o.whisper_model, o.language,
-                                             progress=self.on_progress)
+                                             progress=self.on_progress, vocabulary=o.vocabulary)
                 self.transcript.save(cache)
+                self._cues(wav, cache)
                 wav.unlink(missing_ok=True)
+            self.cues = self._cues(None, cache)
         log(f"transcript: {len(self.transcript.words)} words, language={self.transcript.language}")
+
+    def _cues(self, wav: Path | None, transcript_cache: Path) -> dict:
+        """Audio energy / pace cues for selection, cached next to the transcript."""
+        path = transcript_cache.with_name(transcript_cache.stem + "-cues.json")
+        if path.exists():
+            return json.loads(path.read_text())
+        if not self.info.has_audio:
+            return {}
+        tmp = None
+        if wav is None or not wav.exists():
+            self.note("measuring audio cues")
+            tmp = wav = media.extract_audio(self.src, self.work / "cues.wav")
+        cues = audio_cues(wav, self.transcript)
+        path.write_text(json.dumps(cues))
+        if tmp:
+            tmp.unlink(missing_ok=True)
+        return cues
 
     # -- 2. select ----------------------------------------------------------
     @property
@@ -151,13 +185,8 @@ class Project:
             log(f"resuming {len(clips)} clips from {self.state_path} (use --reselect to start over)")
         else:
             self.note("finding clips with Claude")
-            cands = find_moments(
-                self.transcript, brief=o.brief, tone=o.tone, count=o.count,
-                min_len=o.min_len, max_len=o.max_len, target_len=o.target_len,
-                model=o.model, effort=o.effort,
-            )
-            refined = [r for c in cands if (r := refine(c, self.transcript, o.min_len, o.max_len))]
-            clips = dedupe(refined)[: o.count]
+            cands = self.find_candidates()
+            clips = dedupe(cands)[: o.count]
         if o.style != "auto":
             for c in clips:
                 c.style = o.style
@@ -174,6 +203,16 @@ class Project:
                 f"score {c.score:3d}  {c.style:9s} {c.title}")
         return clips
 
+    def find_candidates(self) -> list[Clip]:
+        o = self.opts
+        cands = find_moments(
+            self.transcript, brief=o.brief, tone=o.tone, count=o.count,
+            min_len=o.min_len, max_len=o.max_len, target_len=o.target_len,
+            model=o.model, effort=o.effort, cues=getattr(self, "cues", {}),
+            examples=o.examples, batch=o.economy,
+        )
+        return [r for c in cands if (r := refine(c, self.transcript, o.min_len, o.max_len))]
+
     def save(self) -> None:
         with self.lock:
             tmp = self.state_path.with_suffix(".tmp")
@@ -181,11 +220,11 @@ class Project:
             tmp.replace(self.state_path)
 
     def clip_text(self, c: Clip) -> str:
-        return self.transcript.text_between(c.start, c.end)
+        return " ... ".join(self.transcript.text_between(a, b) for a, b in c.parts())
 
     # -- 3. copy ------------------------------------------------------------
     def copy_sig(self, c: Clip) -> str:
-        return hashlib.sha1(f"{c.start:.2f}|{c.end:.2f}|{c.title}|{c.hook}".encode()).hexdigest()[:10]
+        return hashlib.sha1(f"{c.parts()}|{c.title}|{c.hook}".encode()).hexdigest()[:10]
 
     def ensure_copy(self, clips: list[Clip], force: bool = False) -> None:
         o = self.opts
@@ -195,7 +234,8 @@ class Project:
         if not todo:
             return
         self.note(f"writing post copy for {len(todo)} clip(s)")
-        write_copy(todo, self.transcript, brief=o.brief, tone=o.tone, model=o.model, extra=o.copy_extra)
+        write_copy(todo, self.transcript, brief=o.brief, tone=o.tone, model=o.model, extra=o.copy_extra,
+                   batch=o.economy)
         with self.lock:
             for c in todo:
                 if c.copy:
@@ -207,35 +247,44 @@ class Project:
     # -- 4. render ----------------------------------------------------------
     def render_sig(self, c: Clip) -> str:
         o = self.opts
-        key = (f"{c.start:.3f}|{c.end:.3f}|{c.style}|{c.hook}|{o.hook_mode}|{o.layout}|{o.two_shot}|"
-               f"{o.crosstalk}|{o.use_asd}|{sorted(o.style_overrides.items())}|{o.crf}")
+        key = (f"{c.parts()}|{c.style}|{c.hook}|{c.emphasis}|{o.hook_mode}|{o.layout}|{o.two_shot}|"
+               f"{o.crosstalk}|{o.use_asd}|{sorted(o.style_overrides.items())}|{o.crf}|{o.tighten}|"
+               f"{o.audio_clean}|{o.brand}|{o.mask_profanity}|{o.framing}")
         return hashlib.sha1(key.encode()).hexdigest()[:10]
 
-    def plan_for(self, c: Clip) -> Plan:
+    def plan_for(self, a: float, b: float) -> Plan:
         o = self.opts
         w, h = self.info.display_size
         if o.layout in ("fit", "center"):
-            return Plan(w, h, [Shot(0, c.duration, o.layout)])
-        return analyze(str(self.src), c.start, c.end, (w, h), fallback="fit",
-                       two_shot=o.two_shot, use_asd=o.use_asd, crosstalk=o.crosstalk)
+            return Plan(w, h, [Shot(0, b - a, o.layout)])
+        return analyze(str(self.src), a, b, (w, h), fallback="fit", two_shot=o.two_shot,
+                       use_asd=o.use_asd, crosstalk=o.crosstalk, framing=o.framing)
 
     def render(self, c: Clip, progress=None) -> Path:
         o = self.opts
-        log(f"rendering {c.slug} ({c.duration:.1f}s, {c.style})")
+        parts = c.parts()
+        log(f"rendering {c.slug} ({c.duration:.1f}s, {c.kind}, {c.style})")
         if progress:
             progress("analysing speakers")
-        plan = self.plan_for(c)
-        c.layout = plan.describe()
+        plans = [self.plan_for(a, b) for a, b in parts]
+        c.layout = " | ".join(p.describe() for p in plans)
         log(f"  layout: {c.layout}")
+        fps = min(round(self.info.fps), 60) or 30
+        src_words = [w for a, b in parts for w in self.transcript.words_between(a, b)]
+        pieces = build_pieces(parts, src_words, fps, tighten=o.tighten)
+        content = total_duration(pieces)
+        if o.tighten:
+            log(f"  tightened {c.duration:.1f}s -> {content:.1f}s in {len(pieces)} pieces")
+        span_words = self.transcript.words_between(min(a for a, _ in parts), max(b for _, b in parts))
+        words = map_words(pieces, span_words, drop_fillers=o.tighten)
         style = get_style(c.style or DEFAULT_STYLE, **o.style_overrides)
-        words = [Word(w.text, round(w.start - c.start, 3), round(w.end - c.start, 3))
-                 for w in self.transcript.words_between(c.start, c.end)]
-        words = [w for w in words if w.end > 0 and w.start < c.duration]
-        cap_y = 0.5 if plan.dominant_layout == "stack" else style.y
+        cap_y = 0.5 if all(p.dominant_layout == "stack" for p in plans) else style.y
         ass_path = self.work / f"{c.slug}.ass"
-        ass_path.write_text(build_ass(words, style, hook=c.hook, hook_mode=o.hook_mode,
-                                      duration=c.duration, y=cap_y))
-        (self.out / f"{c.slug}.srt").write_text(build_srt(words, style))
+        # signature styles are drawn per frame by captions_fx; the ASS file then only carries the hook
+        ass_path.write_text(build_ass([] if c.style in FX_STYLES else words, style, hook=c.hook, hook_mode=o.hook_mode,
+                                      duration=content, y=cap_y, emphasis=c.emphasis,
+                                      mask_profanity=o.mask_profanity))
+        (self.out / f"{c.slug}.srt").write_text(build_srt(words, style, o.mask_profanity))
         if progress:
             progress("encoding")
         # remove an older render of this clip under a different title
@@ -243,14 +292,41 @@ class Project:
             for ext in (".mp4", ".jpg", ".srt", ".post.json"):
                 (self.out / (Path(c.file).stem + ext)).unlink(missing_ok=True)
         mp4 = self.out / f"{c.slug}.mp4"
-        render_clip(self.info, c.start, c.end, plan, ass_path, mp4,
-                    crf=o.crf, preset=o.preset, loudnorm=o.loudnorm)
-        thumbnail(mp4, min(1.0, c.duration / 3), self.out / f"{c.slug}.jpg")
+        overlay = None
+        if c.style in FX_STYLES:
+            from .captions_fx import FxCaptions
+            fx = FxCaptions(c.style, words, c.emphasis, o.mask_profanity, duration=content,
+                            y=0.5 if cap_y == 0.5 else None)
+            overlay = fx.draw
+        total = render_clip(self.info, parts, pieces, plans, ass_path, mp4, crf=o.crf, preset=o.preset,
+                            loudnorm=o.loudnorm, audio_clean=o.audio_clean, brand=o.brand,
+                            encoder=o.encoder, progress=progress, overlay=overlay)
+        thumbnail(mp4, min(1.0, content / 3), self.out / f"{c.slug}.jpg")
         with self.lock:
             c.file = mp4.name
             c.render_sig = self.render_sig(c)
+            c.out_duration = round(total, 2)
         self.save()
         return mp4
+
+    def render_many(self, clips: list[Clip], on_start=None, on_done=None) -> None:
+        """Render several clips, `parallel` at a time."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def one(c: Clip):
+            if on_start:
+                on_start(c)
+            err = None
+            try:
+                self.render(c)
+            except Exception as e:  # keep going with the other clips
+                err = e
+                log(f"render failed for {c.slug}: {e}")
+            if on_done:
+                on_done(c, err)
+
+        with ThreadPoolExecutor(max_workers=max(1, self.opts.parallel)) as ex:
+            list(ex.map(one, clips))
 
     # -- 5. summary ---------------------------------------------------------
     def write_summary(self) -> None:
@@ -288,7 +364,7 @@ def run(opts: Options) -> list[Clip]:
         log(f"post copy failed: {e}")
     for c in clips:
         c.status = "approved"
-        p.render(c)
+    p.render_many(clips)
     p.write_summary()
     log(f"done: {len(clips)} clips in {p.out} ({time.time() - t0:.0f}s)")
     return clips

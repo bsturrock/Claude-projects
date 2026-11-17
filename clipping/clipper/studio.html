@@ -93,6 +93,13 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 video.src { width: 100%; border-radius: 8px; background: #000; aspect-ratio: 16/9; }
 .timeline { position: relative; height: 32px; margin: 10px 0 6px; background: var(--panel-2); border-radius: 6px; cursor: pointer; overflow: hidden; }
 .timeline .range { position: absolute; top: 0; bottom: 0; background: var(--clip); border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+.timeline .range.act { background: rgba(255, 212, 0, .3); }
+.timeline .range span { position: absolute; top: 2px; left: 4px; font-size: 10px; color: var(--accent); }
+.parts { display: flex; flex-direction: column; gap: 6px; }
+.part { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.part.act { border-color: var(--accent); }
+.part input { width: 86px; }
+.part .lb { width: 54px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .timeline .head { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; }
 .timeline .lbl { position: absolute; bottom: 2px; font-size: 10px; color: var(--muted); }
 .trim { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -140,8 +147,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const fmt = (t) => { t = Math.max(0, t || 0); const m = Math.floor(t / 60), s = (t % 60).toFixed(1).padStart(4, "0"); return `${m}:${s}`; };
 const num = (n) => n == null ? "" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "K" : n.toLocaleString();
 const PLAT = { tiktok: "TikTok", youtube_shorts: "Shorts", instagram: "Reels", x: "X" };
-const METRICS = ["views", "likes", "comments", "shares"];
-let STYLES = {}, timer = null, saveT = null, uploads = {};
+let STYLES = {}, CHANNELS = {}, timer = null, saveT = null, uploads = {};
 
 function toast(m) { const t = $("toast"); t.textContent = m; t.classList.add("show"); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove("show"), 1800); }
 async function api(path, body) {
@@ -158,7 +164,7 @@ async function route() {
   const h = location.hash.replace(/^#\/?/, "").split("/");
   try {
     if (h[0] === "p" && h[2] === "s" && h[4] === "c") await clipView(h[1], h[3], +h[5]);
-    else if (h[0] === "p" && h[1]) await projectView(h[1], h[2] || "clips");
+    else if (h[0] === "p" && h[1]) await projectView(h[1], "clips");
     else await homeView();
   } catch (e) { $("app").innerHTML = `<div class="panel err">${esc(e.message)}</div>`; }
 }
@@ -167,7 +173,7 @@ window.addEventListener("hashchange", route);
 // ---------------------------------------------------------------- home
 async function homeView() {
   const d = await api("/api/projects");
-  STYLES = d.styles;
+  STYLES = d.styles; CHANNELS = d.channels;
   $("crumb").textContent = ""; $("hdr").innerHTML = "";
   const app = $("app");
   app.innerHTML = `<div class="row" style="margin-bottom:14px"><h1>Projects</h1><span class="spacer"></span>
@@ -175,15 +181,17 @@ async function homeView() {
     <div id="newform"></div>
     <div class="grid pgrid">${d.projects.map((p) => `
       <a class="pcard" href="#/p/${p.id}">
-        <div class="row"><span class="n">${esc(p.name)}</span><span class="spacer"></span>${p.busy ? `<span class="chip run">processing</span>` : ""}</div>
+        <div class="row"><span class="n">${esc(p.name)}</span>${p.channel && CHANNELS[p.channel] ? `<span class="chip" style="background:${CHANNELS[p.channel].bg};color:#111;border-color:transparent">${esc(CHANNELS[p.channel].name)}</span>` : ""}<span class="spacer"></span>${p.busy ? `<span class="chip run">processing</span>` : ""}</div>
         <div class="b">${esc(p.brief) || '<span class="muted">No prompt yet</span>'}</div>
-        <div class="stats"><span><b>${p.sources}</b> sources</span><span><b>${p.clips}</b> clips</span><span><b>${p.posted}</b> posted</span><span><b>${num(p.views)}</b> views</span></div>
+        <div class="stats"><span><b>${p.sources}</b> sources</span><span><b>${p.clips}</b> clips</span><span><b>${p.posted}</b> posted</span><span><b>${p.top}</b> top performers</span></div>
       </a>`).join("") || `<div class="muted">No projects yet. Create one per show, topic or creator.</div>`}
     </div><p class="hint">Workspace: ${esc(d.workspace)}</p>`;
   $("newp").onclick = () => {
-    $("newform").innerHTML = `<div class="panel settings" style="margin-bottom:14px">${settingsForm({ name: "", brief: "", tone: "", style: "auto", count: 5, min_len: 15, max_len: 60, hook_mode: "intro", copy_notes: "", auto_render: true, two_shot: "cut", crosstalk: true, whisper_model: "small" })}
+    $("newform").innerHTML = `<div class="panel settings" style="margin-bottom:14px">${settingsForm({ name: "", brief: "", tone: "", style: "auto", count: 5, min_len: 15, max_len: 90, hook_mode: "intro", copy_notes: "", auto_render: true, two_shot: "cut", crosstalk: true, whisper_model: "small", channel: "", end_card: true, vocabulary: "", tighten: false, audio_clean: false, mask_profanity: false, economy: false, watch_folder: "", framing: "auto" })}
       <div class="row sec"><button class="primary" id="create">Create project</button><button class="ghost" id="cancel">Cancel</button></div></div>`;
     $("cancel").onclick = () => ($("newform").innerHTML = "");
+    $("s_channel").onchange = () => { const ch = CHANNELS[$("s_channel").value]; if (!ch) return;
+      for (const [k, v] of Object.entries(ch.defaults || {})) { const el = $({ style: "s_style", tighten: "s_tighten", audio_clean: "s_clean", end_card: "s_endcard" }[k]); if (el) el.type === "checkbox" ? (el.checked = v) : (el.value = v); } };
     $("create").onclick = async () => { const p = await api("/api/projects", readSettings()); location.hash = `#/p/${p.id}`; };
     $("s_name").focus();
   };
@@ -192,31 +200,44 @@ async function homeView() {
 
 function settingsForm(p) {
   const opt = (v, cur, label) => `<option value="${v}" ${String(v) === String(cur) ? "selected" : ""}>${label || v}</option>`;
-  return `<label>Project name</label><input id="s_name" value="${esc(p.name)}" placeholder="e.g. The Founder Pod, or AI news clips">
+  const chk = (id, on, label, hint) => `<label class="row" style="margin:0" title="${esc(hint || "")}"><input type="checkbox" id="${id}" ${on ? "checked" : ""}> ${label}</label>`;
+  return `<div class="two"><div><label>Project name</label><input id="s_name" value="${esc(p.name)}" placeholder="e.g. The Founder Pod, or AI news clips"></div>
+    <div><label>Channel</label><select id="s_channel">${opt("", p.channel, "none")}${Object.entries(CHANNELS).map(([k, c]) => opt(k, p.channel, `${c.name} (${c.description})`)).join("")}</select></div></div>
     <label>Prompt: what to clip, for whom, what angle</label><textarea id="s_brief" placeholder="e.g. Contrarian takes on hiring and fundraising for first-time founders. Prioritise heated disagreements and specific numbers.">${esc(p.brief)}</textarea>
     <div class="two"><div><label>Tone</label><input id="s_tone" value="${esc(p.tone)}" placeholder="direct, a bit funny"></div>
     <div><label>Caption style</label><select id="s_style">${opt("auto", p.style, "auto (Claude picks per clip)")}${Object.keys(STYLES).map((k) => opt(k, p.style)).join("")}</select></div></div>
     <div class="two"><div><label>Clips per source</label><input id="s_count" type="number" min="1" max="30" value="${p.count}"></div>
-    <div class="two"><div><label>Min s</label><input id="s_min" type="number" value="${p.min_len}"></div><div><label>Max s</label><input id="s_max" type="number" value="${p.max_len}"></div></div></div>
+    <div class="two"><div><label>Min s</label><input id="s_min" type="number" value="${p.min_len}"></div><div><label title="Clips still finish their sentence, so they can run a little over">Max s</label><input id="s_max" type="number" value="${p.max_len}"></div></div></div>
     <label>Notes for post copy (handles, CTA, links)</label><input id="s_notes" value="${esc(p.copy_notes)}" placeholder="e.g. Mention the full episode is on Spotify">
+    <label>Names and terms to spell right (comma separated)</label><input id="s_vocab" value="${esc(p.vocabulary || "")}" placeholder="e.g. Yaron Brook, Sam Seder, Ayn Rand">
     <div class="two"><div><label>Hook headline</label><select id="s_hook">${opt("intro", p.hook_mode, "first 3.5s")}${opt("full", p.hook_mode, "whole clip")}${opt("off", p.hook_mode, "off")}</select></div>
     <div><label>Two people far apart</label><select id="s_two">${opt("cut", p.two_shot, "cut to speaker")}${opt("stack", p.two_shot, "split screen")}</select></div></div>
-    <div class="row" style="margin-top:10px;gap:16px">
-      <label class="row" style="margin:0"><input type="checkbox" id="s_auto" ${p.auto_render ? "checked" : ""}> Render clips automatically</label>
-      <label class="row" style="margin:0"><input type="checkbox" id="s_cross" ${p.crosstalk ? "checked" : ""}> Split screen on crosstalk</label></div>
-    <label>Transcription model</label><select id="s_whisper">${["small", "medium", "large-v3-turbo", "large-v3"].map((m) => opt(m, p.whisper_model)).join("")}</select>`;
+    <label>Framing</label><select id="s_framing">${opt("auto", p.framing || "auto", "auto (loosens when faces are big)")}${opt("tight", p.framing, "tight (full-height crop)")}${opt("medium", p.framing, "medium (4:5 window)")}${opt("wide", p.framing, "wide (square window)")}</select>
+    <div class="row" style="margin-top:12px;gap:8px 16px">
+      ${chk("s_endcard", p.end_card, "Channel end card")}
+      ${chk("s_tighten", p.tighten, "Trim long pauses", "Shortens pauses longer than 0.8 s (and um/uh) to about 0.4 s")}
+      ${chk("s_clean", p.audio_clean, "Clean up voices", "Denoise, de-ess and compress. Best for podcasts; leave off for TV/film audio")}
+      ${chk("s_mask", p.mask_profanity, "Mask swearing in captions")}
+      ${chk("s_auto", p.auto_render, "Render clips automatically")}
+      ${chk("s_cross", p.crosstalk, "Split screen on crosstalk")}
+      ${chk("s_economy", p.economy, "Economy mode", "Claude Batch API: half the cost, results can take longer")}</div>
+    <div class="two"><div><label>Transcription model</label><select id="s_whisper">${["small", "medium", "large-v3-turbo", "large-v3"].map((m) => opt(m, p.whisper_model)).join("")}</select></div>
+    <div><label>Watch folder (new videos here are added automatically)</label><input id="s_watch" value="${esc(p.watch_folder || "")}" placeholder="e.g. ~/Movies/Recordings"></div></div>`;
 }
 function readSettings() {
   return { name: $("s_name").value, brief: $("s_brief").value, tone: $("s_tone").value, style: $("s_style").value,
     count: +$("s_count").value, min_len: +$("s_min").value, max_len: +$("s_max").value, copy_notes: $("s_notes").value,
     hook_mode: $("s_hook").value, two_shot: $("s_two").value, auto_render: $("s_auto").checked,
-    crosstalk: $("s_cross").checked, whisper_model: $("s_whisper").value };
+    crosstalk: $("s_cross").checked, whisper_model: $("s_whisper").value, channel: $("s_channel").value,
+    vocabulary: $("s_vocab").value, end_card: $("s_endcard").checked, tighten: $("s_tighten").checked,
+    audio_clean: $("s_clean").checked, mask_profanity: $("s_mask").checked, economy: $("s_economy").checked,
+    watch_folder: $("s_watch").value.trim(), framing: $("s_framing").value };
 }
 
 // ---------------------------------------------------------------- project
 let PV = { filter: "all" };
 async function projectView(pid, tab) {
-  if (!Object.keys(STYLES).length) STYLES = (await api("/api/projects")).styles;
+  if (!Object.keys(STYLES).length) { const d = await api("/api/projects"); STYLES = d.styles; CHANNELS = d.channels; }
   PV.pid = pid; PV.tab = tab;
   const app = $("app");
   app.innerHTML = `<div class="ptop">
@@ -270,23 +291,33 @@ async function refreshProject(full) {
       <div class="hint">New settings apply to sources you add or re-run from now on. Use "Find again" on a source to re-clip it.</div></div>`
       : `<div class="row"><h2 style="margin:0">Prompt</h2><span class="spacer"></span><button id="editp">Edit</button></div>
         <p style="white-space:pre-wrap;margin:8px 0">${esc(p.brief) || '<span class="muted">No prompt yet. Add one so Claude knows what to look for.</span>'}</p>
-        <div class="stats"><span>Tone: <b>${esc(p.tone) || "-"}</b></span><span>Style: <b>${p.style}</b></span><span><b>${p.count}</b> clips per source</span><span><b>${p.min_len}-${p.max_len}s</b></span></div>
+        <div class="stats"><span>Channel: <b>${p.channel && CHANNELS[p.channel] ? esc(CHANNELS[p.channel].name) : "none"}</b></span><span>Tone: <b>${esc(p.tone) || "-"}</b></span><span>Style: <b>${p.style}</b></span><span><b>${p.count}</b> clips per source</span><span><b>${p.min_len}-${p.max_len}s</b></span></div>
+        <div class="hint">${[p.end_card && p.channel ? "end card" : "", p.tighten ? "trim pauses" : "", p.audio_clean ? "voice cleanup" : "", p.mask_profanity ? "mask swearing" : "", p.economy ? "economy mode" : "", p.watch_folder ? `watching ${esc(p.watch_folder)}` : ""].filter(Boolean).join(" · ")}</div>
         ${p.copy_notes ? `<div class="hint">Copy notes: ${esc(p.copy_notes)}</div>` : ""}`;
     if (PV.editing) {
-      $("savep").onclick = async () => { await api(`/api/p/${p.id}`, readSettings()); PV.editing = false; toast("Saved"); refreshProject(true); };
+      $("savep").onclick = async () => { try { await api(`/api/p/${p.id}`, readSettings()); PV.editing = false; toast("Saved"); refreshProject(true); } catch (e) { toast(e.message); } };
       $("cancelp").onclick = () => { PV.editing = false; refreshProject(true); };
       $("delp").onclick = async () => { if (confirm(`Delete "${p.name}" and all its clips? This cannot be undone.`)) { await api(`/api/p/${p.id}/delete`, {}); location.hash = "#/"; } };
     } else $("editp").onclick = () => { PV.editing = true; refreshProject(true); };
   }
   const clips = d.clips;
   const counts = { all: clips.length, review: clips.filter((c) => c.status === "pending").length,
-    approved: clips.filter((c) => c.status === "approved").length, posted: clips.filter((c) => Object.keys(c.posts || {}).length).length };
-  $("tabs").innerHTML = [["all", "All"], ["review", "To review"], ["approved", "Approved"], ["posted", "Posted"]].map(([k, l]) =>
-    `<button data-f="${k}" class="${PV.tab === "clips" && PV.filter === k ? "on" : ""}">${l} (${counts[k]})</button>`).join("") +
-    `<span class="spacer"></span><button data-perf class="${PV.tab === "performance" ? "on" : ""}">Performance</button>`;
-  $("tabs").querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { PV.filter = b.dataset.f; location.hash = `#/p/${PV.pid}`; if (PV.tab === "clips") refreshProject(); }));
-  $("tabs").querySelector("[data-perf]").onclick = () => (location.hash = `#/p/${PV.pid}/performance`);
-  if (PV.tab === "performance") drawPerformance(clips); else drawClips(clips);
+    approved: clips.filter((c) => c.status === "approved").length, posted: clips.filter((c) => Object.keys(c.posts || {}).length).length,
+    top: clips.filter((c) => c.rating === "top").length };
+  const toRender = clips.filter((c) => c.status === "approved" && (!c.rendered || c.outdated) && !(c.job && ["queued", "running"].includes(c.job.state)));
+  $("tabs").innerHTML = [["all", "All"], ["review", "To review"], ["approved", "Approved"], ["posted", "Posted"], ["top", "Top performers"]].map(([k, l]) =>
+    `<button data-f="${k}" class="${PV.filter === k ? "on" : ""}">${l} (${counts[k]})</button>`).join("") +
+    `<span class="spacer"></span><button data-bulk="approve" title="Approve every clip in this view">Approve all shown</button><button data-bulk="reject" title="Reject every clip in this view">Reject all shown</button>` +
+    `<button class="primary" data-bulk="render" ${toRender.length ? "" : "disabled"}>Render approved (${toRender.length})</button>`;
+  $("tabs").querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { PV.filter = b.dataset.f; refreshProject(); }));
+  $("tabs").querySelectorAll("[data-bulk]").forEach((b) => (b.onclick = async () => {
+    const a = b.dataset.bulk, list = a === "render" ? toRender : visibleClips(clips);
+    if (!list.length) return;
+    if (a !== "render" && !confirm(`${a === "approve" ? "Approve" : "Reject"} ${list.length} clip(s)?`)) return;
+    await api(`/api/p/${PV.pid}/bulk`, { action: a, items: list.map((c) => [c.sid, c.index]) });
+    toast(a === "render" ? `Rendering ${list.length} clip(s)` : "Done"); refreshProject();
+  }));
+  drawClips(clips);
 }
 
 function drawSources() {
@@ -307,39 +338,33 @@ function drawSources() {
   el.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => { if (confirm("Remove this source and all its clips?")) { await api(`/api/p/${PV.pid}/s/${b.dataset.del}/delete`, {}); refreshProject(); } }));
 }
 
-function drawClips(clips) {
+function visibleClips(clips) {
   const f = PV.filter;
-  const list = clips.filter((c) => f === "all" || (f === "review" && c.status === "pending") || (f === "approved" && c.status === "approved") || (f === "posted" && Object.keys(c.posts || {}).length))
+  return clips.filter((c) => f === "all" || (f === "review" && c.status === "pending") || (f === "approved" && c.status === "approved")
+    || (f === "posted" && Object.keys(c.posts || {}).length) || (f === "top" && c.rating === "top"))
     .sort((a, b) => b.score - a.score);
+}
+const KIND = { cold_open: "cold open", stitched: "stitched" };
+function drawClips(clips) {
+  const list = visibleClips(clips);
   $("body").innerHTML = list.length ? `<div class="grid cgrid">${list.map((c) => {
     const posted = Object.keys(c.posts || {});
-    const views = posted.reduce((n, k) => n + (c.posts[k].views || 0), 0);
     const job = c.job && (c.job.state === "running" || c.job.state === "queued");
     const st = c.status === "approved" ? '<span class="chip ok st">approved</span>' : c.status === "rejected" ? '<span class="chip bad st">rejected</span>' : "";
     return `<a class="ccard ${c.status}" href="#/p/${c.pid}/s/${c.sid}/c/${c.index}">
       <div class="th" style="${c.thumb ? `background-image:url('${c.thumb}?v=${c.render_sig}')` : ""}">${c.thumb ? "" : `<div class="ph">${job ? "rendering..." : "not rendered"}</div>`}${st}<span class="du">${c.duration.toFixed(0)}s</span></div>
       <div class="meta"><div class="t">${esc(c.title)}</div>
-        <div class="row" style="gap:5px"><span class="chip">${c.style}</span>${c.score ? `<span class="chip">${c.score}</span>` : ""}${c.outdated ? '<span class="chip warn">changed</span>' : ""}</div>
-        ${posted.length ? `<div class="row" style="gap:5px">${posted.map((k) => `<span class="chip ok">${PLAT[k]}</span>`).join("")}${views ? `<span class="muted" style="font-size:12px">${num(views)} views</span>` : ""}</div>` : ""}
+        <div class="row" style="gap:5px"><span class="chip">${c.style}</span>${KIND[c.kind] ? `<span class="chip">${KIND[c.kind]}</span>` : ""}${c.variant_of ? `<span class="chip">variant</span>` : ""}${c.rating === "top" ? '<span class="chip ok">top</span>' : c.rating === "flop" ? '<span class="chip bad">flop</span>' : ""}${c.outdated ? '<span class="chip warn">changed</span>' : ""}</div>
+        ${posted.length ? `<div class="row" style="gap:5px">${posted.map((k) => `<span class="chip ok">${PLAT[k]}</span>`).join("")}</div>` : ""}
+        <div class="row" style="gap:5px"><button class="ok ${c.status === "approved" ? "on" : ""}" data-q="approve" data-sid="${c.sid}" data-i="${c.index}" style="padding:3px 8px;font-size:12px">Approve</button><button class="bad ${c.status === "rejected" ? "on" : ""}" data-q="reject" data-sid="${c.sid}" data-i="${c.index}" style="padding:3px 8px;font-size:12px">Reject</button></div>
       </div></a>`;
   }).join("")}</div>` : `<div class="muted">${clips.length ? "Nothing in this view." : "No clips yet. Drop a video above."}</div>`;
-}
-
-function drawPerformance(clips) {
-  const rows = [];
-  const tot = Object.fromEntries(Object.keys(PLAT).map((k) => [k, { posts: 0, views: 0, likes: 0, comments: 0, shares: 0 }]));
-  for (const c of clips) for (const [k, p] of Object.entries(c.posts || {})) {
-    rows.push({ c, k, p });
-    tot[k].posts++; for (const m of METRICS) tot[k][m] += p[m] || 0;
-  }
-  rows.sort((a, b) => (b.p.views || 0) - (a.p.views || 0));
-  const er = (p) => p.views ? (((p.likes || 0) + (p.comments || 0) + (p.shares || 0)) / p.views * 100).toFixed(1) + "%" : "";
-  $("body").innerHTML = `<div class="panel"><h2>By platform</h2><div class="tablewrap"><table><tr><th>Platform</th><th class="num">Posts</th>${METRICS.map((m) => `<th class="num">${m}</th>`).join("")}<th class="num">Avg views</th><th class="num">Engagement</th></tr>
-    ${Object.entries(tot).map(([k, t]) => `<tr><td>${PLAT[k]}</td><td class="num">${t.posts}</td>${METRICS.map((m) => `<td class="num">${num(t[m])}</td>`).join("")}<td class="num">${t.posts ? num(Math.round(t.views / t.posts)) : ""}</td><td class="num">${er(t)}</td></tr>`).join("")}</table></div></div>
-    <div class="panel sec"><h2>Posts, best first</h2>${rows.length ? `<div class="tablewrap"><table><tr><th>Clip</th><th>Platform</th><th>Posted</th><th>Style</th><th class="num">Length</th>${METRICS.map((m) => `<th class="num">${m}</th>`).join("")}<th class="num">Eng.</th><th>Updated</th></tr>
-    ${rows.map(({ c, k, p }) => `<tr><td><a href="#/p/${c.pid}/s/${c.sid}/c/${c.index}">${esc(c.title)}</a>${p.url ? ` <a href="${esc(p.url)}" target="_blank" rel="noopener" class="muted">&#8599;</a>` : ""}</td><td>${PLAT[k]}</td><td>${esc(p.posted_at || "")}</td><td>${c.style}</td><td class="num">${c.duration.toFixed(0)}s</td>${METRICS.map((m) => `<td class="num">${num(p[m])}</td>`).join("")}<td class="num">${er(p)}</td><td class="muted">${esc(p.updated || "")}</td></tr>`).join("")}</table></div>`
-    : '<div class="muted">Nothing posted yet. Open a clip, post it, then log the link and numbers under "Posted to".</div>'}
-    <div class="hint">Numbers are what you enter on each clip. Update them now and then; each day's values are kept as history.</div></div>`;
+  $("body").querySelectorAll("[data-q]").forEach((b) => (b.onclick = async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const c = clips.find((x) => x.sid === b.dataset.sid && x.index === +b.dataset.i);
+    const want = b.dataset.q === "approve" ? (c.status === "approved" ? "pending" : "approve") : (c.status === "rejected" ? "pending" : "reject");
+    await api(`/api/p/${PV.pid}/bulk`, { action: want, items: [[c.sid, c.index]] }); refreshProject();
+  }));
 }
 
 // ---------------------------------------------------------------- clip editor
@@ -353,35 +378,45 @@ async function clipView(pid, sid, idx) {
         <button id="prev">&larr; Prev</button><button id="next">Next &rarr;</button></div>
       <video class="src" id="player" controls preload="metadata"></video>
       <div class="hint" id="prevnote"></div>
-      <div class="timeline" id="timeline"><div class="range" id="tlrange"></div><div class="head" id="tlhead"></div><span class="lbl" id="tlL" style="left:4px"></span><span class="lbl" id="tlR" style="right:4px"></span></div>
+      <div class="timeline" id="timeline"><div id="tlranges"></div><div class="head" id="tlhead"></div><span class="lbl" id="tlL" style="left:4px"></span><span class="lbl" id="tlR" style="right:4px"></span></div>
       <div class="row"><button id="playclip">&#9654; Play clip</button><button id="playfrom">From 3s before</button><span class="dur" id="dur"></span>
         <span class="spacer"></span><button class="ok" id="approve">Approve</button><button class="bad" id="reject">Reject</button></div>
-      <div class="trim sec">
-        <div><label>Start (s)</label><div class="row"><button data-n="start:-1">-1</button><button data-n="start:-0.25">-.25</button><input id="start" type="number" step="0.05"><button data-n="start:0.25">+.25</button><button data-n="start:1">+1</button><button id="setstart">&#8676; playhead</button></div></div>
-        <div><label>End (s)</label><div class="row"><button data-n="end:-1">-1</button><button data-n="end:-0.25">-.25</button><input id="end" type="number" step="0.05"><button data-n="end:0.25">+.25</button><button data-n="end:1">+1</button><button id="setend">playhead &#8677;</button></div></div>
-      </div>
+      <div class="sec"><div class="row" style="margin-bottom:6px"><h2 style="margin:0">Parts</h2><span class="muted" id="kind"></span><span class="spacer"></span>
+        <button id="addpart" title="Add a part starting at the playhead">+ Part at playhead</button></div>
+        <div class="parts" id="parts"></div>
+        <div class="hint">Parts play in this order. Use two or more for a cold open (payoff first) or to stitch moments together. Keys: i / o set the selected part's start / end at the playhead.</div></div>
       <div class="sec"><h2>Transcript</h2><div class="words" id="words"></div>
-        <div class="hint">Click a word to jump. Alt/Option-click: start here. Shift-click: end after this word.</div></div>
+        <div class="hint">Click a word to jump. Alt/Option-click: start the selected part here. Shift-click: end it after this word.</div></div>
       <div class="sec two"><div><label>Title</label><input id="title"></div><div><label>On-screen hook</label><input id="hook"></div></div>
       <div class="sec"><h2>Caption style</h2><div class="styles" id="styles"></div><div class="hint" id="styledesc"></div></div>
       <div class="hint" id="why" style="font-style:italic"></div>
-      <div class="row sec"><button class="primary" id="render">Render</button><button id="addclip">+ New clip at playhead</button><span class="spacer"></span><button class="bad" id="del">Delete clip</button></div>
+      <div class="row sec"><button class="primary" id="render">Render</button><button id="variant" title="Copy this clip with an alternative hook and a different caption style">Make variant</button><button id="addclip">+ New clip at playhead</button><span class="spacer"></span><button class="bad" id="del">Delete clip</button></div>
       <div class="err" id="err"></div>
     </div>
     <div>
       <div class="panel out"><div class="row" style="margin-bottom:8px"><h2 style="margin:0">Output</h2><span class="spacer"></span><a id="dl" class="chip" style="text-decoration:none" hidden>Download</a></div><div id="outvideo"></div></div>
+      <div class="panel sec"><h2>How did it do?</h2><div class="row"><button class="ok" id="top">Top performer</button><button class="bad" id="flop">Flopped</button></div>
+        <div class="hint">Rated clips are shown to Claude as examples the next time it picks clips for this project.</div></div>
       <div class="panel sec" id="copybox"></div>
       <div class="panel sec" id="posts"></div>
     </div></div>`;
   const P = $("player");
-  P.addEventListener("timeupdate", () => { if (CV.stopAt !== null && P.currentTime >= CV.stopAt) { P.pause(); CV.stopAt = null; } drawTimeline(); });
-  $("playclip").onclick = () => { seek(CV.c.start); CV.stopAt = CV.c.end; P.play(); };
-  $("playfrom").onclick = () => { seek(CV.c.start - 3); CV.stopAt = CV.c.end; P.play(); };
+  CV.part = 0; CV.playQ = null;
+  P.addEventListener("timeupdate", () => {
+    if (CV.playQ && CV.playQ.length && P.currentTime >= CV.playQ[0][1]) {  // play parts in order
+      CV.playQ.shift();
+      if (CV.playQ.length) seek(CV.playQ[0][0]); else { P.pause(); CV.playQ = null; }
+    }
+    drawTimeline();
+  });
+  const playParts = (pre) => { const ps = CV.c.parts.map((x) => [...x]); ps[0][0] = Math.max(0, ps[0][0] - pre); CV.playQ = ps; seek(ps[0][0]); P.play(); };
+  $("playclip").onclick = () => playParts(0);
+  $("playfrom").onclick = () => playParts(3);
+  $("addpart").onclick = () => { const t = P.currentTime || 0; CV.part = CV.c.parts.length; saveParts([...CV.c.parts, [t, Math.min(CV.src.duration, t + 8)]]); };
+  $("top").onclick = () => save({ rating: CV.c.rating === "top" ? "" : "top" });
+  $("flop").onclick = () => save({ rating: CV.c.rating === "flop" ? "" : "flop" });
+  $("variant").onclick = async () => { const r = await api(base() + `/c/${idx}/variant`, {}); toast("Variant created"); location.hash = `#/p/${pid}/s/${sid}/c/${r.index}`; };
   $("timeline").onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); seek(+e.currentTarget.dataset.a + (e.clientX - r.left) / r.width * +e.currentTarget.dataset.span); };
-  $("setstart").onclick = () => save({ start: P.currentTime });
-  $("setend").onclick = () => save({ end: P.currentTime });
-  document.querySelectorAll("[data-n]").forEach((b) => (b.onclick = () => { const [k, d] = b.dataset.n.split(":"); save({ [k]: +(CV.c[k] + +d).toFixed(3) }); }));
-  for (const k of ["start", "end"]) $(k).onchange = () => save({ [k]: +$(k).value });
   for (const k of ["title", "hook"]) $(k).oninput = () => { clearTimeout(saveT); saveT = setTimeout(() => save({ [k]: $(k).value }, true), 500); };
   $("approve").onclick = () => save({ status: CV.c.status === "approved" ? "pending" : "approved" });
   $("reject").onclick = () => save({ status: CV.c.status === "rejected" ? "pending" : "rejected" });
@@ -393,15 +428,37 @@ async function clipView(pid, sid, idx) {
   document.onkeydown = (e) => {
     if (!location.hash.includes("/c/") || ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
     if (e.key === " ") { e.preventDefault(); P.paused ? P.play() : P.pause(); }
-    if (e.key === "i") save({ start: P.currentTime }); if (e.key === "o") save({ end: P.currentTime });
+    if (e.key === "i") setPart(CV.part, 0, P.currentTime); if (e.key === "o") setPart(CV.part, 1, P.currentTime);
     if (e.key === "a") $("approve").click(); if (e.key === "x") $("reject").click();
     if (e.key === "j") go(1); if (e.key === "k") go(-1);
   };
   await loadClip(true);
-  setTimeout(() => seek(CV.c.start), 300);
+  setTimeout(() => seek(CV.c.parts[0][0]), 300);
   poll(() => loadClip(false), 1500);
 }
 const base = () => `/api/p/${CV.pid}/s/${CV.sid}`;
+function saveParts(parts) { return save({ parts: parts.map(([a, b]) => [+(+a).toFixed(3), +(+b).toFixed(3)]) }); }
+function setPart(i, k, v) { const ps = CV.c.parts.map((x) => [...x]); if (!ps[i]) return; ps[i][k] = Math.max(0, v); saveParts(ps); }
+function drawParts(full) {
+  const box = $("parts"); if (!full && typingIn(box)) return;
+  const c = CV.c, sig = JSON.stringify([c.parts, CV.part]);
+  if (!full && box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  const many = c.parts.length > 1;
+  box.innerHTML = c.parts.map(([a, b], i) => `<div class="part ${i === CV.part ? "act" : ""}" data-i="${i}">
+    <span class="lb" data-sel="${i}">${many ? (c.kind === "cold_open" && i === 0 ? "Payoff" : `Part ${i + 1}`) : "Clip"}</span>
+    <button data-n="${i}:0:-0.25">-.25</button><input data-pi="${i}:0" type="number" step="0.05" value="${a.toFixed(2)}"><button data-n="${i}:0:0.25">+.25</button><button data-ph="${i}:0" title="Start at playhead">&#8676;</button>
+    <span class="muted">to</span>
+    <button data-ph="${i}:1" title="End at playhead">&#8677;</button><button data-n="${i}:1:-0.25">-.25</button><input data-pi="${i}:1" type="number" step="0.05" value="${b.toFixed(2)}"><button data-n="${i}:1:0.25">+.25</button>
+    <span class="muted">${(b - a).toFixed(1)}s</span><span class="spacer"></span>
+    ${many && i > 0 ? `<button class="ghost" data-up="${i}" title="Move earlier">&#8593;</button>` : ""}${many ? `<button class="ghost" data-rm="${i}" title="Remove part">&times;</button>` : ""}</div>`).join("");
+  box.querySelectorAll("[data-sel]").forEach((el) => (el.onclick = () => { CV.part = +el.dataset.sel; drawParts(true); drawTimeline(); seek(c.parts[CV.part][0]); }));
+  box.querySelectorAll("[data-n]").forEach((b) => (b.onclick = () => { const [i, k, d] = b.dataset.n.split(":").map(Number); CV.part = i; setPart(i, k, c.parts[i][k] + d); }));
+  box.querySelectorAll("[data-ph]").forEach((b) => (b.onclick = () => { const [i, k] = b.dataset.ph.split(":").map(Number); CV.part = i; setPart(i, k, $("player").currentTime); }));
+  box.querySelectorAll("[data-pi]").forEach((inp) => (inp.onchange = () => { const [i, k] = inp.dataset.pi.split(":").map(Number); setPart(i, k, +inp.value); }));
+  box.querySelectorAll("[data-rm]").forEach((b) => (b.onclick = () => { const ps = c.parts.filter((_, j) => j !== +b.dataset.rm); CV.part = 0; saveParts(ps); }));
+  box.querySelectorAll("[data-up]").forEach((b) => (b.onclick = () => { const i = +b.dataset.up, ps = c.parts.map((x) => [...x]); [ps[i - 1], ps[i]] = [ps[i], ps[i - 1]]; CV.part = i - 1; saveParts(ps); }));
+}
 const typingIn = (el) => el.contains(document.activeElement) && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
 function seek(t) { const p = $("player"); if (p && p.src) p.currentTime = Math.max(0, t); }
 
@@ -413,8 +470,12 @@ async function loadClip(full) {
   if (d.source.preview && !P.src) { P.src = d.source.preview; P.addEventListener("loadedmetadata", () => seek(c.start), { once: true }); }
   $("prevnote").textContent = d.source.preview ? "" : "Preparing a browser-playable preview of the source...";
   const act = document.activeElement;
-  for (const k of ["start", "end", "title", "hook"]) if (full || act !== $(k)) $(k).value = k === "start" || k === "end" ? c[k].toFixed(2) : c[k];
-  const dd = c.end - c.start, bad = dd < CV.limits.min || dd > CV.limits.max;
+  for (const k of ["title", "hook"]) if (full || act !== $(k)) $(k).value = c[k];
+  if (CV.part >= c.parts.length) CV.part = 0;
+  drawParts(full);
+  $("kind").textContent = c.parts.length > 1 ? (c.kind === "cold_open" ? "cold open" : "stitched") : "";
+  $("top").classList.toggle("on", c.rating === "top"); $("flop").classList.toggle("on", c.rating === "flop");
+  const dd = c.duration, bad = dd < CV.limits.min || dd > CV.limits.max;
   $("dur").textContent = `${dd.toFixed(1)}s${bad ? ` (target ${CV.limits.min}-${CV.limits.max}s)` : ""}`; $("dur").className = "dur" + (bad ? " bad" : "");
   $("approve").classList.toggle("on", c.status === "approved"); $("reject").classList.toggle("on", c.status === "rejected");
   $("why").textContent = c.rationale ? `Why this clip: ${c.rationale}` : "";
@@ -425,7 +486,7 @@ async function loadClip(full) {
   if (full) $("styles").innerHTML = Object.keys(STYLES).map((k) => `<button data-s="${k}">${k}</button>`).join("");
   $("styles").querySelectorAll("[data-s]").forEach((b) => { b.classList.toggle("on", b.dataset.s === c.style); b.onclick = () => save({ style: b.dataset.s }); });
   $("styledesc").textContent = STYLES[c.style] || "";
-  const key = `${c.start}:${c.end}`;
+  const key = JSON.stringify(c.parts);
   if (key !== CV.wordsKey) { CV.wordsKey = key; CV.words = await api(base() + `/words?start=${c.start - 8}&end=${c.end + 8}`); drawWords(); }
   drawTimeline();
   const ov = $("outvideo");
@@ -443,15 +504,16 @@ function drawWords() {
   const c = CV.c, box = $("words"); box.innerHTML = "";
   for (const [w, s, e] of CV.words) {
     const sp = document.createElement("span"); sp.textContent = w; sp.dataset.s = s; sp.dataset.e = e;
-    if (e > c.start && s < c.end) sp.className = "in";
-    sp.onclick = (ev) => ev.altKey ? save({ start: Math.max(0, s - 0.08) }) : ev.shiftKey ? save({ end: e + 0.25 }) : seek(s);
+    if (c.parts.some(([a, b]) => e > a && s < b)) sp.className = "in";
+    sp.onclick = (ev) => ev.altKey ? setPart(CV.part, 0, s - 0.08) : ev.shiftKey ? setPart(CV.part, 1, e + 0.25) : seek(s);
     box.append(sp, " ");
   }
 }
 function drawTimeline() {
   const c = CV.c; if (!c || !$("timeline")) return;
-  const pad = Math.max(10, (c.end - c.start) * 0.4), a = Math.max(0, c.start - pad), b = Math.min(CV.src.duration, c.end + pad), sp = b - a;
-  $("tlrange").style.left = `${(c.start - a) / sp * 100}%`; $("tlrange").style.width = `${(c.end - c.start) / sp * 100}%`;
+  const pad = Math.max(10, (c.end - c.start) * 0.25), a = Math.max(0, c.start - pad), b = Math.min(CV.src.duration, c.end + pad), sp = b - a;
+  const many = c.parts.length > 1;
+  $("tlranges").innerHTML = c.parts.map(([x, y], i) => `<div class="range ${many && i === CV.part ? "act" : ""}" style="left:${(x - a) / sp * 100}%;width:${(y - x) / sp * 100}%">${many ? `<span>${i + 1}</span>` : ""}</div>`).join("");
   $("tlL").textContent = fmt(a); $("tlR").textContent = fmt(b);
   const t = $("player").currentTime; $("tlhead").style.left = `${Math.min(100, Math.max(0, (t - a) / sp * 100))}%`;
   $("timeline").dataset.a = a; $("timeline").dataset.span = sp;
@@ -508,10 +570,8 @@ function drawPosts(full) {
     if (!p) return `<div class="row" style="margin-top:6px"><span style="width:70px">${label}</span><button data-mark="${k}">Mark as posted</button></div>`;
     return `<div class="post" data-p="${k}"><div class="row"><b>${label}</b><span class="muted">${esc(p.posted_at || "")}</span><span class="spacer"></span>
       ${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener" class="chip">open &#8599;</a>` : ""}<button class="ghost" data-unmark="${k}" title="Remove">&times;</button></div>
-      <input data-k="url" placeholder="Post link" value="${esc(p.url || "")}" style="margin-top:6px">
-      <div class="m4" style="margin-top:6px">${METRICS.map((m) => `<div><label style="margin:0 0 2px">${m}</label><input data-k="${m}" inputmode="numeric" value="${p[m] ?? ""}"></div>`).join("")}</div>
-      ${p.updated ? `<div class="hint">Numbers updated ${esc(p.updated)}</div>` : ""}</div>`;
-  }).join("")}<div class="hint">Post from the downloaded file, then log it here to track it under Performance.</div>`;
+      <input data-k="url" placeholder="Post link (optional)" value="${esc(p.url || "")}" style="margin-top:6px"></div>`;
+  }).join("")}<div class="hint">Mark where you've posted it so you know what's already gone out.</div>`;
   box.querySelectorAll("[data-mark]").forEach((b) => (b.onclick = () => save({ post: { platform: b.dataset.mark } })));
   box.querySelectorAll("[data-unmark]").forEach((b) => (b.onclick = () => { if (confirm("Remove this post record?")) save({ post: { platform: b.dataset.unmark, remove: true } }); }));
   box.querySelectorAll("[data-p] input").forEach((inp) => (inp.onchange = () => {

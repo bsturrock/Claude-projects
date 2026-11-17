@@ -25,11 +25,11 @@ from .speaker import ASD_FPS, Track, analyze_speakers
 OUT_W, OUT_H = 1080, 1920
 
 # crosstalk: both people speaking this long -> temporary split screen
-CROSSTALK_MIN = 38    # frames (~1.5 s)
+CROSSTALK_MIN = 50    # frames (~2 s)
 
 # speaker switching
 SWITCH_CONFIRM = 12   # frames (~0.5 s) a new speaker must lead before we cut
-MIN_HOLD = 30         # frames (~1.2 s) minimum time on one speaker
+MIN_HOLD = 50         # frames (~2 s): never cut between speakers more often than this
 SWITCH_MARGIN = 0.5   # score margin over the current speaker
 
 
@@ -52,6 +52,7 @@ class Plan:
     src_h: int
     shots: list[Shot]
     content: tuple = ()  # (x0, y0, x1, y1) live picture inside static graphics, source px
+    aspect: float = 9 / 16  # crop window width/height; wider than 9:16 = framed on a blurred fill
 
     def shot_at(self, t: float) -> Shot:
         for s in self.shots:
@@ -168,9 +169,32 @@ def _path_for(tracks: list[Track], focus: np.ndarray, a: int, sw: int, half: flo
     return np.clip(out, half, sw - half)
 
 
+FRAMING = {"tight": 9 / 16, "medium": 4 / 5, "wide": 1.0}
+
+
+def choose_aspect(tracks: list[Track], content_h: float, framing: str) -> float:
+    """How wide a window to cut around the speaker.
+
+    A full-height 9:16 crop makes a big face fill the screen. When faces are
+    large relative to the picture we keep more of the frame (4:5 or 1:1 window
+    on a blurred fill) so it doesn't feel like the camera is in their face.
+    """
+    if framing in FRAMING:
+        return FRAMING[framing]
+    long = [t for t in tracks if len(t.frames) >= 25]
+    if not long:
+        return FRAMING["tight"]
+    r = float(np.median([t.height for t in long])) / max(1.0, content_h)
+    if r <= 0.17:
+        return FRAMING["tight"]
+    if r <= 0.28:
+        return FRAMING["medium"]
+    return FRAMING["wide"]
+
+
 def analyze(src: str, start: float, end: float, size: tuple[int, int],
             fallback: str = "fit", two_shot: str = "cut", use_asd: bool = True,
-            crosstalk: bool = True) -> Plan:
+            crosstalk: bool = True, framing: str = "auto") -> Plan:
     sw, sh = size
     dur = end - start
     if sw / sh <= 9 / 16 + 0.02:
@@ -181,7 +205,9 @@ def analyze(src: str, start: float, end: float, size: tuple[int, int],
         return Plan(sw, sh, [Shot(0, dur, fallback)])
     cx0, cy0, cx1, cy1 = content
     ch = cy1 - cy0
-    crop_w = min(ch * 9 / 16, cx1 - cx0)
+    aspect = choose_aspect(tracks, ch, framing)
+    crop_w = min(ch * aspect, cx1 - cx0)
+    aspect = crop_w / ch
     half = crop_w / 2
     bounds = cuts + [n]
     shots = []
@@ -191,7 +217,7 @@ def analyze(src: str, start: float, end: float, size: tuple[int, int],
         if len(shot.xs):
             shot.xs = np.clip(shot.xs, cx0 + half, cx1 - half)
         shots.append(shot)
-    return Plan(sw, sh, shots, content=content)
+    return Plan(sw, sh, shots, content=content, aspect=aspect)
 
 
 def _plan_shot(tracks, a, b, t0, t1, sw, sh, crop_w, half, fallback, two_shot,
@@ -250,8 +276,8 @@ def _add_crosstalk(shot: Shot, main: list[Track], sm: np.ndarray, a: int, sh: in
     both = np.zeros(len(raw), bool)
     for lo, hi in _runs(raw):
         both[lo:hi] = True
-    for lo, hi in _runs(~both):
-        if hi - lo < 12 and lo > 0 and hi < len(both):
+    for lo, hi in _runs(~both):  # short breaks between crosstalk would flicker: bridge them
+        if hi - lo < CROSSTALK_MIN and lo > 0 and hi < len(both):
             both[lo:hi] = True
     keep = np.zeros(len(raw), bool)
     for lo, hi in _runs(both):
@@ -335,5 +361,15 @@ class Reframer:
             cx = float(shot.xs[i]) * k - ox
         else:
             cx = fw / 2
-        box = _crop_box(frame, cx, fh / 2, fh * 9 / 16, fh)
-        return _resize(box, OUT_W, OUT_H)
+        aspect = self.plan.aspect if shot.layout == "track" else 9 / 16
+        box = _crop_box(frame, cx, fh / 2, fh * aspect, fh)
+        if aspect <= 9 / 16 + 0.01:
+            return _resize(box, OUT_W, OUT_H)
+        # wider window: frame it on a blurred, darkened fill of itself
+        bg = _cover(box, OUT_W // 8, OUT_H // 8)
+        bg = cv2.resize(cv2.GaussianBlur(bg, (0, 0), 5), (OUT_W, OUT_H), interpolation=cv2.INTER_LINEAR)
+        bg = (bg * 0.5).astype(np.uint8)
+        h = int(round(OUT_W / (box.shape[1] / box.shape[0]) / 2) * 2)
+        y0 = max(0, (OUT_H - h) // 2 - int(OUT_H * 0.05))
+        bg[y0:y0 + h] = _resize(box, OUT_W, h)[: OUT_H - y0]
+        return bg

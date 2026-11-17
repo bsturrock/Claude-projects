@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -34,6 +35,8 @@ class CaptionStyle:
     box: bool = False            # translucent box behind the text instead of an outline
     box_alpha: int = 0x50        # 0 = opaque, 255 = invisible
     word_gap: int = 1            # extra hard spaces between words (tight display fonts)
+    emph_color: str = "#3DFF8B"  # colour of emphasised key words when not being spoken
+    emph_scale: int = 110        # % size of emphasised words
     description: str = ""
 
 
@@ -44,25 +47,36 @@ PRESETS: dict[str, CaptionStyle] = {
                     "podcasts, motivation, most viral talking-head content.",
     ),
     "playful": CaptionStyle(
-        font="Lilita One", size=114, palette=("#FFE500", "#3DF5FF", "#FF5FD8", "#8CFF4F"),
+        font="Lilita One", size=114, emph_color="#FFFFFF", emph_scale=118, palette=("#FFE500", "#3DF5FF", "#FF5FD8", "#8CFF4F"),
         outline=9, shadow=5, max_words=3, max_chars=15, bounce=True, word_gap=2, active_scale=114, tilt=4,
         description="Chunky rounded type, colour-cycling active word, bounce and tilt. Gaming, "
                     "streams, comedy, reactions, entertainment, lighthearted chaos.",
     ),
     "editorial": CaptionStyle(
-        font="DM Serif Display", size=130, highlight="#F5C451", outline=16, shadow=0,
-        box=True, box_alpha=0x48, uppercase=False, max_words=4, max_chars=24, pop=False,
+        font="DM Serif Display", size=130, highlight="#F5C451", outline=4, shadow=3, blur=2,
+        emph_color="#F5C451", emph_scale=100, uppercase=False, max_words=4, max_chars=24, pop=False,
         fade_ms=90, y=0.72,
-        description="Elegant serif, sentence case, gold active word, soft fade. News, politics, "
+        description="Elegant serif, sentence case, gold active word, soft shadow and fade. News, politics, "
                     "business, finance, history, documentary, serious or emotional moments.",
     ),
     "clean": CaptionStyle(
-        font="Poppins ExtraBold", size=138, highlight="#3DFF8B", outline=8, shadow=3, word_gap=2,
+        font="Poppins ExtraBold", size=138, highlight="#3DFF8B", emph_color="#FFE500", outline=8, shadow=3, word_gap=2,
         uppercase=False, max_words=4, max_chars=24,
         description="Modern sans, sentence case, green active word. Education, how-to, tech, "
                     "science, interviews, calm explainers.",
     ),
 }
+# Signature channel styles, drawn by captions_fx (not libass). Listed here so
+# they can be chosen like any other style.
+PRESETS["yap"] = CaptionStyle(
+    font="Lilita One",
+    description="Yap signature: lowercase words in a yellow speech bubble with a lightning tail; "
+                "words fill in as spoken, key words flip into black pills.")
+PRESETS["framebite"] = CaptionStyle(
+    font="DM Serif Display",
+    description="Framebite signature: cinematic serif subtitles with a teal underline that glides "
+                "word to word; key words turn teal.")
+FX_STYLES = {"yap", "framebite"}
 DEFAULT_STYLE = "bold"
 
 
@@ -93,6 +107,38 @@ def _clean(text: str) -> str:
     return text.replace("\\", "/").replace("{", "(").replace("}", ")")
 
 
+PROFANITY = {
+    "fuck", "fucking", "fucked", "fucker", "fuckin", "motherfucker", "motherfucking", "shit", "shitty",
+    "bullshit", "bitch", "bitches", "cunt", "asshole", "dick", "dickhead", "pussy", "cock", "bastard",
+    "whore", "slut", "nigga", "nigger", "faggot", "retard", "retarded",
+}
+
+
+def _key(t: str) -> str:
+    return re.sub(r"[^\w']", "", t.lower())
+
+
+def mask_word(text: str) -> str:
+    """f**k-style masking that keeps punctuation: 'fucking,' -> 'f*****g,'."""
+    m = re.match(r"^(\W*)(.*?)(\W*)$", text)
+    pre, core, post = m.groups() if m else ("", text, "")
+    if _key(core) not in PROFANITY or len(core) < 3:
+        return text
+    return pre + core[0] + "*" * (len(core) - 2) + core[-1] + post
+
+
+def emphasis_keys(phrases: list[str]) -> set[str]:
+    stop = {"the", "a", "an", "and", "or", "to", "of", "in", "on", "is", "it", "that", "this", "i",
+            "you", "we", "they", "he", "she", "be", "are", "was", "for", "with", "at", "as", "so"}
+    out = set()
+    for p in phrases or []:
+        for t in p.split():
+            k = _key(t)
+            if k and k not in stop:
+                out.add(k)
+    return out
+
+
 def chunk_words(words: list[Word], style: CaptionStyle) -> list[list[Word]]:
     chunks: list[list[Word]] = []
     cur: list[Word] = []
@@ -112,8 +158,11 @@ def chunk_words(words: list[Word], style: CaptionStyle) -> list[list[Word]]:
 
 def build_ass(words: list[Word], style: CaptionStyle, *, hook: str = "",
               hook_mode: str = "intro", hook_secs: float = 3.5, duration: float = 0.0,
-              y: float | None = None) -> str:
-    """Words must already be relative to the clip start."""
+              y: float | None = None, emphasis: list[str] | None = None,
+              mask_profanity: bool = False) -> str:
+    """Words must already be relative to the clip start (output timeline)."""
+    emph = emphasis_keys(emphasis or [])
+    em_c = _ass_color(style.emph_color)
     y_px = int(1920 * (y if y is not None else style.y))
     primary = _ass_color(style.color)
     hl = _ass_color(style.highlight)
@@ -161,7 +210,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             chunk_end = nxt if nxt - chunk[-1].end < 0.6 else min(chunk_end, nxt)
         if duration:
             chunk_end = min(chunk_end, duration)
-        texts = [_clean(w.text.upper() if style.uppercase else w.text) for w in chunk]
+        texts = [_clean((mask_word(w.text) if mask_profanity else w.text).upper() if style.uppercase
+                        else (mask_word(w.text) if mask_profanity else w.text)) for w in chunk]
+        is_em = [_key(w.text) in emph for w in chunk]
         hl_c = _ass_color(style.palette[ci % len(style.palette)]) if style.palette else hl
         tilt = round(rng.uniform(-style.tilt, style.tilt), 1) if style.tilt else 0
         for wi, w in enumerate(chunk):
@@ -177,8 +228,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     animated = wi == 0 and (style.bounce or style.pop)
                     sc = (f"\\fscx{style.active_scale}\\fscy{style.active_scale}"
                           if style.active_scale != 100 and not animated else "")
+                    if is_em[j] and not sc and style.emph_scale != 100 and not animated:
+                        sc = f"\\fscx{style.emph_scale}\\fscy{style.emph_scale}"
                     reset = "\\fscx100\\fscy100" if sc else ""
                     parts.append(f"{{\\1c{hl_c}{sc}}}{t}{{\\1c{primary}{reset}}}")
+                elif is_em[j]:
+                    animated = wi == 0 and (style.bounce or style.pop)
+                    sc = (f"\\fscx{style.emph_scale}\\fscy{style.emph_scale}"
+                          if style.emph_scale != 100 and not animated else "")
+                    reset = "\\fscx100\\fscy100" if sc else ""
+                    parts.append(f"{{\\1c{em_c}{sc}}}{t}{{\\1c{primary}{reset}}}")
                 else:
                     parts.append(t)
             tag = f"\\pos(540,{y_px})"
@@ -201,7 +260,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(lines) + "\n"
 
 
-def build_srt(words: list[Word], style: CaptionStyle) -> str:
+def build_srt(words: list[Word], style: CaptionStyle, mask_profanity: bool = False) -> str:
+    if mask_profanity:
+        words = [Word(mask_word(w.text), w.start, w.end) for w in words]
     out = []
     for i, chunk in enumerate(chunk_words(words, replace(style, max_words=7, max_chars=42)), 1):
         def ts(t: float) -> str:

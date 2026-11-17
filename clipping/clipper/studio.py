@@ -26,17 +26,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import media
+from . import endcard, media
 from .captions import PRESETS
 from .pipeline import Options, Project, log
-from .selection import Clip, clip_from_dict, dedupe, find_moments, refine
+from .selection import Clip, clip_from_dict, dedupe, overlap
 
 PAGE = Path(__file__).parent / "studio.html"
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".mts", ".m2ts", ".wmv", ".flv"}
 BROWSER_VIDEO = {"h264", "vp8", "vp9", "av1"}
 BROWSER_AUDIO = {"aac", "mp3", "opus", "vorbis"}
 PLATFORMS = ["tiktok", "youtube_shorts", "instagram", "x"]
-METRICS = ["views", "likes", "comments", "shares"]
 
 
 def _id() -> str:
@@ -62,7 +61,7 @@ class ProjectSettings:
     style: str = "auto"
     count: int = 5
     min_len: float = 15
-    max_len: float = 60
+    max_len: float = 90
     target_len: float | None = None
     hook_mode: str = "intro"
     copy_notes: str = ""
@@ -71,6 +70,15 @@ class ProjectSettings:
     whisper_model: str = "small"
     language: str = ""
     auto_render: bool = True
+    channel: str = ""            # brand id (yap, framebite): end card + defaults
+    end_card: bool = True
+    vocabulary: str = ""         # comma/newline separated names and terms
+    tighten: bool = False
+    audio_clean: bool = False
+    mask_profanity: bool = False
+    economy: bool = False
+    watch_folder: str = ""
+    framing: str = "auto"
     created: float = field(default_factory=_now)
 
     @classmethod
@@ -107,7 +115,9 @@ class Workspace:
         self.clip_jobs: dict[tuple[str, str, int], dict] = {}
         self.q: queue.Queue = queue.Queue()
         self.proxy_state: dict[tuple[str, str], str] = {}
+        self.parallel = 2
         threading.Thread(target=self._worker, daemon=True).start()
+        threading.Thread(target=self._watcher, daemon=True).start()
         self._resume()
 
     # -- paths --------------------------------------------------------------
@@ -142,7 +152,9 @@ class Workspace:
         _write_json(d / "project.json", asdict(p))
 
     def create_project(self, data: dict) -> ProjectSettings:
-        p = ProjectSettings.from_dict({**data, "id": _id(), "created": _now()})
+        b = endcard.get_brand(data.get("channel", ""))
+        defaults = dict(b.defaults) if b else {}
+        p = ProjectSettings.from_dict({**defaults, **data, "id": _id(), "created": _now()})
         if not p.name.strip():
             p.name = "Untitled project"
         self.save_project(p)
@@ -156,6 +168,10 @@ class Workspace:
         p = ProjectSettings.from_dict(cur)
         if p.style not in ("auto", *PRESETS):
             p.style = "auto"
+        if p.channel and not endcard.get_brand(p.channel):
+            p.channel = ""
+        if p.watch_folder and not Path(p.watch_folder).expanduser().is_dir():
+            raise ValueError(f"Watch folder not found: {p.watch_folder}")
         p.count = max(1, min(30, int(p.count)))
         p.min_len, p.max_len = float(p.min_len), float(p.max_len)
         if p.min_len >= p.max_len:
@@ -255,13 +271,31 @@ class Workspace:
     # -- pipelines ------------------------------------------------------------
     def options(self, pid: str, sid: str) -> Options:
         p, s = self.project(pid), self.source(pid, sid)
+        vocab = [v.strip() for v in re.split(r"[,\n]", p.vocabulary or "") if v.strip()]
         return Options(
             source=s.path or s.url, out_override=self.sdir(pid, sid), brief=p.brief, tone=p.tone,
             count=p.count, min_len=p.min_len, max_len=p.max_len, target_len=p.target_len,
             style=p.style, hook_mode=p.hook_mode, copy_extra=p.copy_notes, two_shot=p.two_shot,
             crosstalk=p.crosstalk, whisper_model=p.whisper_model, language=p.language or None,
-            review=True, preset="medium",
+            review=True, preset="medium", vocabulary=vocab, tighten=p.tighten,
+            audio_clean=p.audio_clean, mask_profanity=p.mask_profanity, economy=p.economy,
+            brand=p.channel if p.end_card else "", examples=self.examples(pid), parallel=self.parallel,
+            framing=p.framing if p.framing in ("auto", "tight", "medium", "wide") else "auto",
         )
+
+    def examples(self, pid: str) -> list[dict]:
+        """Clips rated top/flop anywhere in this project, for the selection prompt."""
+        out = []
+        for s in self.sources(pid):
+            f = self.sdir(pid, s.id) / "clips.json"
+            if not f.exists():
+                continue
+            for d in json.loads(f.read_text()):
+                if d.get("rating") in ("top", "flop") and d.get("rated_text"):
+                    out.append({"rating": d["rating"], "kind": d.get("kind", "single"),
+                                "duration": d.get("duration", 0), "style": d.get("style", ""),
+                                "hook": d.get("hook", ""), "text": d["rated_text"]})
+        return out
 
     def pipeline(self, pid: str, sid: str, prepare: bool = True) -> Project:
         key = (pid, sid)
@@ -339,33 +373,36 @@ class Workspace:
                     pl.ensure_copy(todo)
                 except Exception as e:
                     log(f"post copy failed: {e}")
-                for n, c in enumerate(todo, 1):
-                    key = (pid, sid, c.index)
-                    self.clip_jobs[key] = {"state": "running", "kind": "render", "msg": "", "error": ""}
-                    stage(f"rendering clip {n} of {len(todo)}")
-                    try:
-                        pl.render(c, progress=lambda m, k=key: self.clip_jobs[k].update(msg=m))
-                        self.clip_jobs[key].update(state="done", msg="")
-                    except Exception as e:
-                        traceback.print_exc()
-                        self.clip_jobs[key].update(state="error", error=str(e)[-500:], msg="")
+                self._render_set(pl, pid, sid, todo, stage)
             pl.write_summary()
             self.set_status(pid, sid, status="ready", stage="")
         except Exception as e:
             traceback.print_exc()
             self.set_status(pid, sid, status="error", stage="", error=str(e)[-800:])
 
+    def _render_set(self, pl: Project, pid: str, sid: str, clips: list[Clip], stage=None) -> None:
+        done = [0]
+
+        def start(c):
+            self.clip_jobs[(pid, sid, c.index)] = {"state": "running", "kind": "render", "msg": "", "error": ""}
+
+        def finish(c, err):
+            done[0] += 1
+            job = self.clip_jobs[(pid, sid, c.index)]
+            job.update(state="error" if err else "done", error=str(err)[-500:] if err else "", msg="")
+            if stage:
+                stage(f"rendered {done[0]} of {len(clips)}")
+
+        if stage:
+            stage(f"rendering {len(clips)} clips")
+        pl.render_many(clips, on_start=start, on_done=finish)
+
     def _select(self, pl: Project, keep_existing: bool) -> None:
         o = pl.opts
         pl.note("finding clips with Claude")
-        cands = find_moments(pl.transcript, brief=o.brief, tone=o.tone, count=o.count,
-                             min_len=o.min_len, max_len=o.max_len, target_len=o.target_len,
-                             model=o.model, effort=o.effort)
-        new = dedupe([r for c in cands if (r := refine(c, pl.transcript, o.min_len, o.max_len))])
-        keep = [c for c in pl.clips if c.status == "approved" or c.posts] if keep_existing else []
-        # drop new candidates that overlap a kept clip
-        new = [c for c in new if all(min(c.end, k.end) - max(c.start, k.start) < 0.25 * c.duration
-                                     for k in keep)][: o.count]
+        new = dedupe(pl.find_candidates())
+        keep = [c for c in pl.clips if c.status == "approved" or c.posts or c.rating] if keep_existing else []
+        new = [c for c in new if all(overlap(c, k) < 0.25 for k in keep)][: o.count]
         if o.style != "auto":
             for c in new:
                 c.style = o.style
@@ -399,18 +436,11 @@ class Workspace:
         except Exception as e:
             for c in clips:
                 self.clip_jobs[(pid, sid, c.index)].update(error=f"post copy failed: {e}")
-        for c in clips:
-            job = self.clip_jobs[(pid, sid, c.index)]
-            if kind != "render":
-                job.update(state="done", msg="")
-                continue
-            try:
-                job.update(state="running", msg="starting")
-                pl.render(c, progress=lambda m, j=job: j.update(msg=m))
-                job.update(state="done", msg="")
-            except Exception as e:
-                traceback.print_exc()
-                job.update(state="error", error=str(e)[-600:], msg="")
+        if kind == "render":
+            self._render_set(pl, pid, sid, clips)
+        else:
+            for c in clips:
+                self.clip_jobs[(pid, sid, c.index)].update(state="done", msg="")
         pl.write_summary()
 
     # -- preview proxy --------------------------------------------------------
@@ -499,19 +529,19 @@ class Workspace:
         out = []
         for p in self.projects():
             srcs = self.sources(p.id)
-            n_clips = n_posted = views = 0
+            n_clips = n_posted = n_top = 0
             busy = sum(s.status in ("queued", "processing") for s in srcs)
             for s in srcs:
                 f = self.sdir(p.id, s.id) / "clips.json"
                 if f.exists():
                     for d in json.loads(f.read_text()):
                         n_clips += 1
-                        posts = d.get("posts") or {}
-                        if posts:
+                        if d.get("posts"):
                             n_posted += 1
-                        views += sum(int(v.get("views") or 0) for v in posts.values())
+                        if d.get("rating") == "top":
+                            n_top += 1
             out.append({**asdict(p), "sources": len(srcs), "clips": n_clips, "posted": n_posted,
-                        "views": views, "busy": busy})
+                        "top": n_top, "busy": busy})
         return out
 
     # -- clip edits ---------------------------------------------------------
@@ -521,13 +551,21 @@ class Workspace:
         if c is None:
             raise KeyError(idx)
         dur = pl.info.duration
+        clamp = lambda v: round(min(max(0.0, float(v)), dur), 3)  # noqa: E731
         with pl.lock:
-            if "start" in body:
-                c.start = round(min(max(0.0, float(body["start"])), dur), 3)
-            if "end" in body:
-                c.end = round(min(max(0.0, float(body["end"])), dur), 3)
-            if c.end <= c.start + 1:
-                c.end = round(min(dur, c.start + 1), 3)
+            if isinstance(body.get("parts"), list) and body["parts"]:
+                parts = [(clamp(a), clamp(b)) for a, b in body["parts"]]
+                parts = [(a, b) if b > a + 0.5 else (a, min(dur, a + 0.5)) for a, b in parts]
+                c.set_parts(parts)
+                if len(parts) > 1 and c.kind == "single":
+                    c.kind = "stitched"
+            elif "start" in body or "end" in body:
+                a = clamp(body.get("start", c.start))
+                b = clamp(body.get("end", c.end))
+                c.set_parts([(a, b if b > a + 1 else min(dur, a + 1))])
+            if body.get("rating") in ("", "top", "flop"):
+                c.rating = body["rating"]
+                c.rated_text = pl.clip_text(c) if c.rating else ""
             for k in ("title", "hook"):
                 if k in body:
                     setattr(c, k, str(body[k])[:200])
@@ -555,23 +593,7 @@ class Workspace:
         cur = dict(c.posts.get(plat) or {})
         if "url" in post:
             cur["url"] = str(post["url"]).strip()[:500]
-        if "posted_at" in post:
-            cur["posted_at"] = str(post["posted_at"])[:20]
         cur.setdefault("posted_at", time.strftime("%Y-%m-%d"))
-        changed = False
-        for m in METRICS:
-            if m in post:
-                v = str(post[m]).replace(",", "").strip()
-                cur[m] = int(float(v)) if v else None
-                changed = True
-        if changed:
-            cur["updated"] = time.strftime("%Y-%m-%d %H:%M")
-            hist = cur.setdefault("history", [])
-            snap = {"at": cur["updated"], **{m: cur.get(m) for m in METRICS}}
-            if not hist or hist[-1]["at"][:10] != snap["at"][:10]:
-                hist.append(snap)
-            else:
-                hist[-1] = snap
         c.posts[plat] = cur
 
     def new_clip(self, pid: str, sid: str, start: float, end: float) -> int:
@@ -584,6 +606,72 @@ class Workspace:
                                  style=p.style if p.style in PRESETS else "bold"))
         pl.save()
         return idx
+
+    def make_variant(self, pid: str, sid: str, idx: int) -> int:
+        """Copy a clip with its next alternative hook and a different caption style."""
+        pl = self.pipeline(pid, sid)
+        with pl.lock:
+            c = next(c for c in pl.clips if c.index == idx)
+            sibs = [x for x in pl.clips if x.variant_of == (c.variant_of or c.index) or x.index == (c.variant_of or c.index)]
+            hooks = [h for h in c.alt_hooks if h not in {x.hook for x in sibs}] or [c.hook]
+            styles = list(PRESETS)
+            used = {x.style for x in sibs}
+            style = next((st for st in styles if st not in used), c.style)
+            n = max(x.index for x in pl.clips) + 1
+            v = Clip(start=c.start, end=c.end, title=f"{c.title} (v{len(sibs) + 1})", hook=hooks[0],
+                     rationale=f"variant of clip {c.index}", score=c.score, style=style, index=n,
+                     segments=[list(p) for p in c.segments], kind=c.kind, emphasis=list(c.emphasis),
+                     alt_hooks=list(c.alt_hooks), variant_of=c.variant_of or c.index, status="approved")
+            pl.clips.append(v)
+        pl.save()
+        return n
+
+    def bulk(self, pid: str, body: dict) -> int:
+        action = body.get("action")
+        items = body.get("items") or []
+        by_src: dict[str, list[int]] = {}
+        for sid, idx in items:
+            by_src.setdefault(sid, []).append(int(idx))
+        for sid, idxs in by_src.items():
+            if action in ("approve", "reject", "pending"):
+                pl = self.pipeline(pid, sid)
+                with pl.lock:
+                    for c in pl.clips:
+                        if c.index in idxs:
+                            c.status = {"approve": "approved", "reject": "rejected"}.get(action, "pending")
+                pl.save()
+            elif action == "render":
+                self.enqueue_clips("render", pid, sid, idxs)
+        return len(items)
+
+    # -- watch folders --------------------------------------------------------
+    def _watcher(self) -> None:
+        sizes: dict[str, int] = {}
+        while True:
+            time.sleep(20)
+            try:
+                for p in self.projects():
+                    if not p.watch_folder:
+                        continue
+                    folder = Path(p.watch_folder).expanduser()
+                    if not folder.is_dir():
+                        continue
+                    known = {s.path for s in self.sources(p.id)}
+                    for f in sorted(folder.iterdir()):
+                        if f.suffix.lower() not in VIDEO_EXT or f.name.startswith("."):
+                            continue
+                        path = str(f.resolve())
+                        if path in known:
+                            continue
+                        size = f.stat().st_size
+                        if sizes.get(path) == size and size > 0:  # unchanged since last scan: done copying
+                            log(f"watch folder: adding {f.name} to {p.name}")
+                            self.add_path(p.id, path)
+                            sizes.pop(path, None)
+                        else:
+                            sizes[path] = size
+            except Exception:
+                traceback.print_exc()
 
     def delete_clip(self, pid: str, sid: str, idx: int) -> None:
         pl = self.pipeline(pid, sid)
@@ -618,8 +706,12 @@ def _make_handler(ws: Workspace):
             self.wfile.write(data)
 
         def _body(self) -> dict:
-            n = int(self.headers.get("Content-Length") or 0)
-            return json.loads(self.rfile.read(n) or b"{}") if n else {}
+            raw = getattr(self, "_raw", None)
+            if raw is None:
+                n = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(n) if n else b""
+                self._raw = raw
+            return json.loads(raw or b"{}")
 
         def _file(self, path: Path, download: str | None = None):
             size = path.stat().st_size
@@ -679,6 +771,8 @@ def _make_handler(ws: Workspace):
                     self.wfile.write(data)
                 elif parts == ["api", "projects"]:
                     self._json({"projects": ws.summary(), "styles": {k: v.description for k, v in PRESETS.items()},
+                                "channels": {k: {"name": b.name, "description": b.description, "bg": b.bg,
+                                                 "defaults": b.defaults} for k, b in endcard.brands().items()},
                                 "workspace": str(ws.root)})
                 elif len(parts) == 3 and parts[:2] == ["api", "p"]:
                     self._json(ws.project_payload(parts[2]))
@@ -725,6 +819,11 @@ def _make_handler(ws: Workspace):
         def do_POST(self):
             u = urlparse(self.path)
             parts = [unquote(x) for x in u.path.strip("/").split("/")]
+            self._raw = None
+            if not (len(parts) == 4 and parts[3] == "upload"):
+                # always drain the body so a keep-alive connection stays in sync
+                n = int(self.headers.get("Content-Length") or 0)
+                self._raw = self.rfile.read(n) if n else b""
             try:
                 if parts == ["api", "projects"]:
                     self._json(asdict(ws.create_project(self._body())))
@@ -737,6 +836,8 @@ def _make_handler(ws: Workspace):
                     name = unquote(self.headers.get("X-Filename") or "video.mp4")
                     n = int(self.headers.get("Content-Length") or 0)
                     self._json(asdict(ws.add_upload(parts[2], name, self.rfile, n)))
+                elif len(parts) == 4 and parts[:2] == ["api", "p"] and parts[3] == "bulk":
+                    self._json({"count": ws.bulk(parts[2], self._body())})
                 elif len(parts) == 4 and parts[:2] == ["api", "p"] and parts[3] == "add":
                     b = self._body()
                     s = ws.add_url(parts[2], b["url"]) if b.get("url") else ws.add_path(parts[2], b.get("path", ""))
@@ -765,6 +866,9 @@ def _make_handler(ws: Workspace):
                         and parts[7] == "delete":
                     ws.delete_clip(parts[2], parts[4], int(parts[6]))
                     self._json({"ok": True})
+                elif len(parts) == 8 and parts[:2] == ["api", "p"] and parts[3] == "s" and parts[5] == "c" \
+                        and parts[7] == "variant":
+                    self._json({"index": ws.make_variant(parts[2], parts[4], int(parts[6]))})
                 else:
                     self._json({"error": "not found"}, 404)
             except KeyError as e:
@@ -778,9 +882,10 @@ def _make_handler(ws: Workspace):
     return H
 
 
-def serve(root: Path, port: int = 8765, open_browser: bool = True) -> None:
+def serve(root: Path, port: int = 8765, open_browser: bool = True, parallel: int = 2) -> None:
     media.require_tools()
     ws = Workspace(root.expanduser())
+    ws.parallel = parallel
     httpd = None
     for p in range(port, port + 20):
         try:

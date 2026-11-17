@@ -1,0 +1,15 @@
+{
+  "name": "Framebite",
+  "bg": "#FAF2E8",
+  "accent": "#06A09B",
+  "sting": "framebite",
+  "description": "Established media: TV, film, interviews",
+  "defaults": {
+    "style": "framebite",
+    "tighten": false,
+    "audio_clean": false,
+    "end_card": true
+  },
+  "anim": "framebite",
+  "seconds": 1.35
+}

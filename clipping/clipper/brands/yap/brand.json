@@ -1,0 +1,15 @@
+{
+  "name": "Yap",
+  "bg": "#F9FC09",
+  "accent": "#111111",
+  "sting": "yap",
+  "description": "Podcasts, streams, debates",
+  "defaults": {
+    "style": "yap",
+    "tighten": true,
+    "audio_clean": true,
+    "end_card": true
+  },
+  "anim": "yap_drop",
+  "seconds": 1.25
+}

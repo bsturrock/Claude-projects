@@ -26,7 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("-t", "--tone", default="", help="e.g. 'funny, irreverent' or 'calm, educational'")
     g.add_argument("-n", "--count", type=int, default=5, help="Number of clips (default 5)")
     g.add_argument("--min", dest="min_len", type=float, default=15, help="Min clip seconds (default 15)")
-    g.add_argument("--max", dest="max_len", type=float, default=60, help="Max clip seconds (default 60)")
+    g.add_argument("--max", dest="max_len", type=float, default=90,
+                   help="Max clip seconds (default 90; clips still end on a sentence)")
     g.add_argument("--target", dest="target_len", type=float, help="Preferred clip length in seconds")
     g.add_argument("--clips", dest="clips_path", type=Path,
                    help="Skip AI selection: JSON list of {start, end, title, hook}")
@@ -59,11 +60,21 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Don't switch to split screen when people talk over each other")
     g.add_argument("--no-asd", action="store_true",
                    help="Disable active speaker detection (follow the largest face)")
+    g.add_argument("--framing", choices=["auto", "tight", "medium", "wide"], default="auto",
+                   help="How close to crop on the speaker; auto loosens it when faces are big")
+    g.add_argument("--tighten", action="store_true",
+                   help="Cut silences and filler words, with punch-in zooms on the cuts")
+    g.add_argument("--clean-audio", action="store_true", help="Denoise, de-ess and compress voices")
+    g.add_argument("--brand", default="", help="Channel brand for the end card (e.g. yap, framebite)")
+    g.add_argument("--mask-profanity", action="store_true", help="Show f**k-style captions")
 
     g = p.add_argument_group("models")
     g.add_argument("--whisper-model", default="small",
                    help="faster-whisper size: tiny/base/small/medium/large-v3/large-v3-turbo")
     g.add_argument("--language", help="Force transcription language (e.g. en)")
+    g.add_argument("--vocab", default="", help="Comma-separated names/terms to spell correctly")
+    g.add_argument("--economy", action="store_true",
+                   help="Use the Claude Batch API for selection and copy: half price, can be slower")
     g.add_argument("--transcript", dest="transcript_path", type=Path,
                    help="Use an existing word-timestamped transcript JSON instead of transcribing")
     g.add_argument("--model", default=DEFAULT_MODEL, help=f"Claude model (default {DEFAULT_MODEL})")
@@ -76,6 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--crf", type=int, default=19, help="x264 quality (lower = better, default 19)")
     g.add_argument("--preset", default="medium", help="x264 preset (default medium)")
     g.add_argument("--no-loudnorm", action="store_true", help="Skip -14 LUFS loudness normalisation")
+    g.add_argument("--encoder", choices=["auto", "videotoolbox", "x264"], default="auto",
+                   help="auto uses the Mac hardware encoder when available")
+    g.add_argument("--parallel", type=int, default=2, help="Clips rendered at once (default 2)")
     return p
 
 
@@ -86,10 +100,11 @@ def studio_main(argv: list[str]) -> int:
                    help="Workspace folder for projects, sources and clips (default ~/ClipStudio)")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="Don't open a browser tab")
+    p.add_argument("--parallel", type=int, default=2, help="Clips rendered at once (default 2)")
     a = p.parse_args(argv)
     from .studio import serve
     try:
-        serve(a.home, port=a.port, open_browser=not a.no_browser)
+        serve(a.home, port=a.port, open_browser=not a.no_browser, parallel=a.parallel)
     except MediaError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -116,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
         write_post_copy=not a.no_copy, copy_extra=a.copy_notes, model=a.model,
         effort=a.effort, crf=a.crf, preset=a.preset, loudnorm=not a.no_loudnorm,
         select_only=a.select_only, review=a.review, reselect=a.reselect, port=a.port,
+        tighten=a.tighten, audio_clean=a.clean_audio, brand=a.brand, mask_profanity=a.mask_profanity,
+        vocabulary=[v.strip() for v in a.vocab.split(",") if v.strip()], economy=a.economy,
+        encoder=a.encoder, parallel=a.parallel, framing=a.framing,
     )
     try:
         run(opts)

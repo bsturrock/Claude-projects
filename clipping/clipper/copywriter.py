@@ -78,14 +78,14 @@ def _normalize_tags(tags: list[str]) -> list[str]:
 
 
 def write_copy(clips: list[Clip], t: Transcript, *, brief: str, tone: str,
-               model: str, effort: str = "medium", extra: str = "") -> None:
+               model: str, effort: str = "medium", extra: str = "", batch: bool = False) -> None:
     blocks = []
     for c in clips:
         blocks.append(
             f'<clip index="{c.index}" duration="{c.duration:.0f}s">\n'
             f"<working_title>{c.title}</working_title>\n"
             f"<on_screen_hook>{c.hook}</on_screen_hook>\n"
-            f"<transcript>{t.text_between(c.start, c.end)}</transcript>\n</clip>"
+            f"<transcript>{' ... '.join(t.text_between(a, b) for a, b in c.parts())}</transcript>\n</clip>"
         )
     user = (
         f"<creator_brief>\n{brief or 'General audience.'}\n</creator_brief>\n"
@@ -95,7 +95,7 @@ def write_copy(clips: list[Clip], t: Transcript, *, brief: str, tone: str,
         + "\n\n".join(blocks)
     )
     data = structured_call(system=COPY_SYSTEM, user=user, schema=COPY_SCHEMA,
-                           model=model, effort=effort)
+                           model=model, effort=effort, batch=batch)
     by_index = {p["index"]: p for p in data["posts"]}
     for c in clips:
         p = by_index.get(c.index)
