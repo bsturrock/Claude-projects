@@ -70,7 +70,8 @@ def iter_frames(src: str, start: float, dur: float, fps: float, out_w: int | Non
         vf = f"fps={fps},scale={ow}:{oh}"
     else:
         ow, oh, vf = sw, sh, f"fps={fps}"
-    cmd = ["ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-i", src, "-t", f"{dur:.3f}",
+    # -v fatal: we often stop reading early on purpose, which ffmpeg reports as a broken pipe
+    cmd = ["ffmpeg", "-v", "fatal", "-ss", f"{start:.3f}", "-i", src, "-t", f"{dur:.3f}",
            "-vf", vf, "-an", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     n = ow * oh * 3

@@ -85,13 +85,24 @@ def render_clip(info: VideoInfo, parts: list[tuple[float, float]], pieces: list[
             labels = []
             uses: dict[int, int] = {}
             for p in pieces:
-                uses[p.part] = uses.get(p.part, 0) + 1
+                if p.part >= 0:
+                    uses[p.part] = uses.get(p.part, 0) + 1
+            trans_in = None
+            if any(p.part < 0 for p in pieces):
+                tdur = next(p.dur for p in pieces if p.part < 0)
+                trans_in = len(parts) + 1
+                inputs += ["-i", str(endcard.write_transition_sound(tmp / "transition.wav", tdur))]
             split_out: dict[int, list[str]] = {}
             for k, n in uses.items():
                 outs = [f"[s{k}_{j}]" for j in range(n)]
                 filt.append(f"[{k + 1}:a]asplit={n}{''.join(outs)}" if n > 1 else f"[{k + 1}:a]anull{outs[0]}")
                 split_out[k] = outs
             for j, p in enumerate(pieces):
+                if p.part < 0:
+                    filt.append(f"[{trans_in}:a]atrim=end={p.dur:.4f},asetpts=PTS-STARTPTS,"
+                                f"apad=whole_dur={p.dur:.4f}[p{j}]")
+                    labels.append(f"[p{j}]")
+                    continue
                 a = parts[p.part][0]
                 s, e = p.src_start - a, p.src_end - a
                 fo = max(0.0, p.dur - 0.012)
@@ -109,7 +120,7 @@ def render_clip(info: VideoInfo, parts: list[tuple[float, float]], pieces: list[
             if card:
                 sting = endcard.write_sting(endcard.get_brand(brand).sting, tmp / "sting.wav", card)
                 inputs += ["-i", str(sting)]
-                filt.append(f"[{len(parts) + 1}:a]anull[sting]")
+                filt.append(f"[{len(parts) + 1 + (1 if trans_in else 0)}:a]anull[sting]")
                 filt.append("[body][sting]concat=n=2:v=0:a=1[aout]")
             else:
                 filt.append("[body]anull[aout]")
@@ -131,6 +142,22 @@ def render_clip(info: VideoInfo, parts: list[tuple[float, float]], pieces: list[
             for j, p in enumerate(pieces):
                 if progress and len(pieces) > 1:
                     progress(f"encoding {j + 1}/{len(pieces)}")
+                if p.part < 0:  # cold-open transition: needs the next piece's first frame
+                    nxt_p = pieces[j + 1]
+                    first = next(iter_frames(src, nxt_p.src_start, 2 / fps, fps, None, info.display_size), None)
+                    if first is None or last is None:
+                        continue
+                    t0 = nxt_p.src_start - parts[nxt_p.part][0]
+                    nxt = _punch(reframers[nxt_p.part].render(first, t0), nxt_p.zoom)
+                    want = round(p.dur * fps)
+                    for k, fr in enumerate(endcard.transition_frames(brand, last, nxt, fps, p.dur)):
+                        if k >= want:
+                            break
+                        if overlay is not None:
+                            overlay(fr, p.out_start + k / fps, transition=True)
+                        enc.stdin.write(fr.tobytes())
+                        written += 1
+                    continue
                 want = round(p.dur * fps)
                 part_a = parts[p.part][0]
                 got = 0
@@ -142,7 +169,7 @@ def render_clip(info: VideoInfo, parts: list[tuple[float, float]], pieces: list[
                     if overlay is not None:
                         if not out.flags.writeable:
                             out = out.copy()
-                        overlay(out, p.out_start + got / fps)
+                        overlay(out, p.out_start + got / fps, transition=False)
                     enc.stdin.write(out.tobytes())
                     last = out
                     got += 1

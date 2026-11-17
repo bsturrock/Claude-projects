@@ -446,3 +446,112 @@ def write_sting(kind: str, path: Path, seconds: float = CARD_SECONDS) -> Path:
         w.setframerate(SR)
         w.writeframes(data.tobytes())
     return path
+
+
+# ---------------------------------------------------------------------------
+# Cold-open transition: "rewind" wipe between the payoff and the start
+# ---------------------------------------------------------------------------
+
+TRANSITION_SECONDS = 0.6
+_TRANS = {
+    "yap": {"bg": (9, 252, 249), "fg": (17, 17, 17), "font": "LilitaOne-Regular.ttf", "text": "rewind", "size": 170},
+    "framebite": {"bg": (155, 160, 6), "fg": (232, 242, 250), "font": "DMSerifDisplay-Regular.ttf", "text": "Earlier",
+                  "size": 170},
+}
+_TRANS_DEFAULT = {"bg": (24, 24, 28), "fg": (255, 255, 255), "font": "Poppins-ExtraBold.ttf", "text": "rewind", "size": 150}
+
+
+@lru_cache(maxsize=4)
+def _trans_label(bid: str) -> np.ndarray:
+    """BGRA image: rewind icon (two left-pointing triangles) + word."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    from .captions import FONTS_DIR
+    spec = _TRANS.get(bid, _TRANS_DEFAULT)
+    font = ImageFont.truetype(str(FONTS_DIR / spec["font"]), spec["size"])
+    word = spec["text"]
+    tw = int(font.getlength(word))
+    asc, desc = font.getmetrics()
+    icon = int(spec["size"] * 0.8)
+    w, h = int(icon * 0.62 * 2) + 44 + tw, asc + desc + 20
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    fg = tuple(reversed(spec["fg"])) + (255,)  # stored BGR -> RGB
+    cy = h // 2 + 4
+    tri = icon * 0.62  # two triangles, the second's tip touching the first's base: the rewind symbol
+    for k in range(2):
+        x = k * tri
+        d.polygon([(x, cy), (x + tri, cy - icon / 2), (x + tri, cy + icon / 2)], fill=fg)
+    d.text((int(tri * 2) + 34, 4), word, font=font, fill=fg)
+    arr = np.asarray(img).astype(np.float32)
+    return arr[..., [2, 1, 0, 3]]  # RGBA -> BGRA
+
+
+def transition_frames(bid: str, last: np.ndarray, nxt: np.ndarray, fps: float,
+                      seconds: float = TRANSITION_SECONDS):
+    """Panel sweeps in right-to-left over a rewinding (streaking) last frame, shows
+    the rewind label, then sweeps out to the left revealing the next frame."""
+    spec = _TRANS.get(bid, _TRANS_DEFAULT)
+    H, W = last.shape[:2]
+    label = _trans_label(bid)
+    n = max(2, round(seconds * fps))
+    panel = np.empty_like(last)
+    panel[:] = spec["bg"]
+    for i in range(n):
+        u = i / (n - 1)
+        if u < 0.45:  # panel enters from the right; video under it streaks backwards
+            k = _out3(u / 0.45)
+            under = last
+            blur = int(1 + 60 * k) | 1
+            under = cv2.blur(under, (blur, 1))
+            under = np.roll(under, int(80 * k), axis=1)
+            x = int(W * (1 - k))
+            frame = under.copy()
+            frame[:, x:] = panel[:, : W - x]
+        else:  # panel exits to the left, next frame revealed behind it
+            k = _out3((u - 0.55) / 0.45) if u > 0.55 else 0.0
+            x = int(W * (1 - k))
+            frame = nxt.copy()
+            frame[:, :x] = panel[:, W - x:]
+        # label rides on the panel, centred while the panel is full-screen
+        if 0.25 < u < 0.85:
+            lu = (u - 0.25) / 0.6
+            s = 0.8 + 0.2 * _out3(lu / 0.4)
+            lab = cv2.resize(label, (int(label.shape[1] * s), int(label.shape[0] * s)))
+            lh, lw = lab.shape[:2]
+            px = 0 if u < 0.45 else -int(W * (_out3((u - 0.55) / 0.45) if u > 0.55 else 0))
+            if u < 0.45:
+                px = int(W * (1 - _out3(u / 0.45)))
+            x0, y0 = (W - lw) // 2 + px, int(H * 0.45 - lh / 2)
+            sx0, ex = max(0, -x0), min(lw, W - x0)
+            if ex > sx0:
+                a = lab[:, sx0:ex, 3:4] / 255.0
+                roi = frame[y0:y0 + lh, x0 + sx0:x0 + ex].astype(np.float32)
+                frame[y0:y0 + lh, x0 + sx0:x0 + ex] = (lab[:, sx0:ex, :3] * a + roi * (1 - a)).astype(np.uint8)
+        yield frame
+
+
+def write_transition_sound(path: Path, seconds: float = TRANSITION_SECONDS) -> Path:
+    """Tape-rewind zip: a fast warbling down-sweep with a little noise, then a click."""
+    rng = np.random.default_rng(11)
+    n = int(SR * seconds)
+    t = np.arange(n) / SR
+    sweep_n = int(SR * 0.38)
+    ts = t[:sweep_n]
+    f = 2200 * np.exp(-ts * 5.5) + 260
+    phase = 2 * np.pi * np.cumsum(f * (1 + 0.25 * np.sin(2 * np.pi * 38 * ts))) / SR
+    zip_ = np.sin(phase) * 0.6 + 0.25 * rng.standard_normal(sweep_n)
+    zip_ *= np.sin(np.linspace(0, np.pi, sweep_n)) ** 0.7
+    mono = np.zeros(n)
+    mono[:sweep_n] += zip_
+    click = _tone(1400, 900, 0.04, 0.008)
+    i = int(0.4 * SR)
+    mono[i:i + len(click)] += 0.8 * click[: n - i]
+    mono = mono / (np.max(np.abs(mono)) or 1) * 10 ** (-14 / 20)
+    data = (np.stack([mono, mono], axis=1) * 32767).astype(np.int16)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes(data.tobytes())
+    return path

@@ -155,3 +155,28 @@ def test_tighten_keeps_short_pauses_and_spaces_cuts():
     # short (<0.8 s) pauses are never cut
     cut_gaps = [pieces[i + 1].src_start - pieces[i].src_end for i in range(len(pieces) - 1)]
     assert all(g > 0.3 for g in cut_gaps)
+
+
+def test_edit_pass_applies_unit_ranges():
+    from clipper import editor
+    t = make_transcript(TEXT)
+    c = Clip(t.segments[4].start + 1, t.segments[6].end - 1, "x")
+    seen = {}
+
+    def fake(**kw):
+        seen["user"] = kw["user"]
+        return {"clips": [{"clip": 0, "usable": True, "kind": "single",
+                           "ranges": [{"first": 3, "last": 6}], "thought": "t"}]}
+
+    editor.structured_call = fake
+    kept = editor.edit_clips([c], t, brief="", tone="", min_len=5, max_len=60, model="x")
+    assert kept == [c] and c.kind == "single"
+    first = next(w for w in t.words if w.start >= c.start)
+    last = [w for w in t.words if w.end <= c.end][-1]
+    assert first.text == "Sentence" and last.text.endswith(".")
+
+    def drop(**kw):
+        return {"clips": [{"clip": 0, "usable": False, "kind": "single", "ranges": [], "thought": ""}]}
+
+    editor.structured_call = drop
+    assert editor.edit_clips([Clip(10, 30, "y")], t, brief="", tone="", min_len=5, max_len=60, model="x") == []

@@ -52,8 +52,8 @@ class FxSpec:
 
 
 SPECS = {
-    "yap": FxSpec("LilitaOne-Regular.ttf", 84, 5, 22, 820, True, 0.71),
-    "framebite": FxSpec("DMSerifDisplay-Regular.ttf", 92, 6, 28, 940, False, 0.72),
+    "yap": FxSpec("LilitaOne-Regular.ttf", 78, 7, 40, 800, True, 0.71),
+    "framebite": FxSpec("DMSerifDisplay-Regular.ttf", 84, 9, 48, 900, False, 0.72),
 }
 
 YAP_YELLOW, YAP_BLACK = _rgb("#F9FC09"), (17, 17, 17)
@@ -68,6 +68,26 @@ def _font(name: str, size: int) -> ImageFont.FreeTypeFont:
 def _ease_out(x: float) -> float:
     x = min(1.0, max(0.0, x))
     return 1 - (1 - x) ** 3
+
+
+COMMON = set("""a an and the but so or if then when what who why how where which that this these those
+it its it's is was are were be been do does did not no yes yeah okay ok well now just like
+there here they them their we our us you your he his she her my me to of in on at for with
+from by as about into over under after before because since while all any some every one
+let's let i'm i've i'd you're we're they're that's what's there's here's don't can't won't
+isn't wasn't aren't didn't doesn't""".split())
+
+
+def soft_lower(text: str, sentence_start: bool) -> str:
+    """Lowercase look that keeps proper nouns and acronyms: only a common word
+    capitalised because it starts a sentence is lowercased (US, DC, Iran stay)."""
+    core = re.sub(r"[^\w']", "", text)
+    if sentence_start and core[:1].isupper() and not core.isupper() and core.lower() in COMMON:
+        i = text.find(core[0])
+        return text[:i] + core[0].lower() + text[i + 1:]
+    if core in ("I",) or len(core) > 1 and core.isupper():
+        return text
+    return text
 
 
 def _chunks(words: list[Word], spec: FxSpec) -> list[list[int]]:
@@ -113,7 +133,8 @@ class FxCaptions:
             texts = []
             for i in ch:
                 t = mask_word(words[i].text) if mask_profanity else words[i].text
-                texts.append(t.lower() if self.spec.lowercase else t)
+                starts = i == 0 or words[i - 1].text[-1:] in ".?!"
+                texts.append(soft_lower(t, starts) if self.spec.lowercase else t)
             nxt = words[chunks[ci + 1][0]].start if ci + 1 < len(chunks) else None
             end = words[ch[-1]].end + 0.3
             if nxt is not None:
@@ -284,3 +305,139 @@ class FxCaptions:
             d.rounded_rectangle((pad + x0 - 2, pad + ybar, pad + x1 + 2, pad + ybar + 9), radius=5,
                                 fill=FB_TEAL + (255,))
         return img
+
+
+# ---------------------------------------------------------------------------
+# Hook headline (top of frame, first seconds)
+# ---------------------------------------------------------------------------
+
+class HookFx:
+    """Branded hook headline.
+
+    yap        yellow lowercase type on a black bubble with a bolt tail, tilted,
+               bounces in and pops out
+    framebite  cream serif title between two thin teal rules that draw outwards
+    (other)    white bold type on a dark translucent pill
+    """
+
+    def __init__(self, brand: str, text: str, mode: str = "intro", seconds: float = 3.5,
+                 duration: float = 0.0):
+        self.brand = brand if brand in ("yap", "framebite") else "plain"
+        self.text = text.strip()
+        self.end = duration if mode == "full" else min(seconds, duration or seconds)
+        self.full = mode == "full"
+        self.y = 0.14
+        self.img = self._build() if self.text and mode != "off" else None
+
+    def _lines(self, font, text, max_w):
+        words = text.split()
+        if font.getlength(text) <= max_w or len(words) < 2:
+            return [text]
+        best = None
+        for cut in range(1, len(words)):
+            a, b = " ".join(words[:cut]), " ".join(words[cut:])
+            score = max(font.getlength(a), font.getlength(b))
+            if best is None or score < best[0]:
+                best = (score, [a, b])
+        return best[1]
+
+    def _build(self) -> Image.Image:
+        if self.brand == "yap":
+            font = _font("LilitaOne-Regular.ttf", 76)
+            lines = self._lines(font, " ".join(soft_lower(w, k == 0) for k, w in enumerate(self.text.split())), 820)
+            lh = int(sum(font.getmetrics()) * 1.0)
+            tw = int(max(font.getlength(l) for l in lines))
+            padx, pady, tail = 42, 26, 46
+            w, h = tw + 2 * padx, lh * len(lines) + 2 * pady
+            img = Image.new("RGBA", (w + 20, h + tail + 10), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            d.rounded_rectangle((10, 0, 10 + w, h), radius=36, fill=YAP_BLACK + (255,))
+            tx = 10 + int(w * 0.22)
+            d.polygon([(tx - 6, h - 2), (tx + 34, h - 2), (tx + 10, h + 18), (tx + 22, h + 16),
+                       (tx - 14, h + tail), (tx + 2, h + 22), (tx - 10, h + 24)], fill=YAP_BLACK + (255,))
+            for i, l in enumerate(lines):
+                x = 10 + padx + (tw - font.getlength(l)) / 2
+                d.text((x, pady - 4 + i * lh), l, font=font, fill=YAP_YELLOW + (255,))
+            return img
+        if self.brand == "framebite":
+            font = _font("DMSerifDisplay-Regular.ttf", 70)
+            lines = self._lines(font, self.text, 860)
+            lh = int(sum(font.getmetrics()) * 1.05)
+            tw = int(max(font.getlength(l) for l in lines))
+            pad, rule = 34, 3
+            w, h = tw + 2 * pad, lh * len(lines) + 2 * pad
+            text = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            dt, ds = ImageDraw.Draw(text), ImageDraw.Draw(shadow)
+            for i, l in enumerate(lines):
+                x = pad + (tw - font.getlength(l)) / 2
+                y = pad - 6 + i * lh
+                ds.text((x, y + 3), l, font=font, fill=(0, 0, 0, 255), stroke_width=3, stroke_fill=(0, 0, 0, 255))
+                dt.text((x, y), l, font=font, fill=FB_CREAM + (255,))
+            img = Image.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(8)), text)
+            self.rule = (pad - 6, h - pad + 10, w - pad + 6, rule)
+            return img
+        font = _font("Poppins-ExtraBold.ttf", 54)
+        lines = self._lines(font, self.text, 860)
+        lh = int(sum(font.getmetrics()) * 0.95)
+        tw = int(max(font.getlength(l) for l in lines))
+        padx, pady = 36, 20
+        w, h = tw + 2 * padx, lh * len(lines) + 2 * pady
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        d.rounded_rectangle((0, 0, w - 1, h - 1), radius=h // 2 if len(lines) == 1 else 30, fill=(12, 12, 14, 185))
+        for i, l in enumerate(lines):
+            d.text((padx + (tw - font.getlength(l)) / 2, pady - 6 + i * lh), l, font=font, fill=(255, 255, 255, 255))
+        return img
+
+    def draw(self, frame: np.ndarray, t: float) -> None:
+        if self.img is None or t >= self.end:
+            return
+        out_t = self.end - t
+        if self.brand == "yap":
+            u = t / 0.22
+            s = 0.6 + 0.5 * _ease_out(u / 0.6) if u < 0.6 else 1.1 - 0.1 * _ease_out((u - 0.6) / 0.4)
+            if not self.full and out_t < 0.18:
+                s *= max(0.0, out_t / 0.18)
+            arr = np.asarray(self.img).astype(np.float32)
+            h, w = arr.shape[:2]
+            pad = int(0.15 * max(w, h))
+            M = cv2.getRotationMatrix2D((w / 2, h / 2), 3.0, max(0.01, s))
+            M[:, 2] += pad
+            arr = cv2.warpAffine(arr, M, (w + 2 * pad, h + 2 * pad), flags=cv2.INTER_LINEAR,
+                                 borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+            _blit_rgba(frame, arr, self.y, 0)
+        elif self.brand == "framebite":
+            img = self.img.copy()
+            u = _ease_out(t / 0.35)
+            x0, y, x1, th = self.rule
+            cx, half = (x0 + x1) / 2, (x1 - x0) / 2 * u
+            d = ImageDraw.Draw(img)
+            d.rectangle((cx - half, y, cx + half, y + th), fill=FB_TEAL + (255,))
+            d.rectangle((cx - half, 14, cx + half, 14 + th), fill=FB_TEAL + (255,))
+            arr = np.asarray(img).astype(np.float32)
+            fade = _ease_out((t - 0.08) / 0.3)
+            if not self.full:
+                fade *= min(1.0, out_t / 0.3)
+            arr[..., 3] *= fade
+            _blit_rgba(frame, arr, self.y, int(10 * (1 - _ease_out(t / 0.35))))
+        else:
+            arr = np.asarray(self.img).astype(np.float32)
+            fade = _ease_out(t / 0.2) * (1.0 if self.full else min(1.0, out_t / 0.25))
+            arr[..., 3] *= fade
+            _blit_rgba(frame, arr, self.y, 0)
+
+
+def _blit_rgba(frame: np.ndarray, arr: np.ndarray, y_frac: float, dy: int) -> None:
+    H, W = frame.shape[:2]
+    h, w = arr.shape[:2]
+    x0 = (W - w) // 2
+    y0 = int(H * y_frac - h / 2) + dy
+    sx0, sy0 = max(0, -x0), max(0, -y0)
+    ex, ey = min(w, W - x0), min(h, H - y0)
+    if ex <= sx0 or ey <= sy0:
+        return
+    a = arr[sy0:ey, sx0:ex, 3:4] / 255.0
+    rgb = arr[sy0:ey, sx0:ex, 2::-1]
+    roi = frame[y0 + sy0:y0 + ey, x0 + sx0:x0 + ex].astype(np.float32)
+    frame[y0 + sy0:y0 + ey, x0 + sx0:x0 + ex] = (rgb * a + roi * (1 - a)).astype(np.uint8)

@@ -390,7 +390,7 @@ async function clipView(pid, sid, idx) {
       <div class="sec two"><div><label>Title</label><input id="title"></div><div><label>On-screen hook</label><input id="hook"></div></div>
       <div class="sec"><h2>Caption style</h2><div class="styles" id="styles"></div><div class="hint" id="styledesc"></div></div>
       <div class="hint" id="why" style="font-style:italic"></div>
-      <div class="row sec"><button class="primary" id="render">Render</button><button id="variant" title="Copy this clip with an alternative hook and a different caption style">Make variant</button><button id="addclip">+ New clip at playhead</button><span class="spacer"></span><button class="bad" id="del">Delete clip</button></div>
+      <div class="row sec"><button class="primary" id="render">Render</button><button id="autoedit" title="Claude re-cuts this clip so it starts where the idea starts and ends right after the payoff">Auto-edit</button><button id="variant" title="Copy this clip with an alternative hook and a different caption style">Make variant</button><button id="addclip">+ New clip at playhead</button><span class="spacer"></span><button class="bad" id="del">Delete clip</button></div>
       <div class="err" id="err"></div>
     </div>
     <div>
@@ -415,6 +415,7 @@ async function clipView(pid, sid, idx) {
   $("addpart").onclick = () => { const t = P.currentTime || 0; CV.part = CV.c.parts.length; saveParts([...CV.c.parts, [t, Math.min(CV.src.duration, t + 8)]]); };
   $("top").onclick = () => save({ rating: CV.c.rating === "top" ? "" : "top" });
   $("flop").onclick = () => save({ rating: CV.c.rating === "flop" ? "" : "flop" });
+  $("autoedit").onclick = async () => { await api(base() + "/autoedit", { indices: [idx] }); toast("Claude is editing this clip..."); };
   $("variant").onclick = async () => { const r = await api(base() + `/c/${idx}/variant`, {}); toast("Variant created"); location.hash = `#/p/${pid}/s/${sid}/c/${r.index}`; };
   $("timeline").onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); seek(+e.currentTarget.dataset.a + (e.clientX - r.left) / r.width * +e.currentTarget.dataset.span); };
   for (const k of ["title", "hook"]) $(k).oninput = () => { clearTimeout(saveT); saveT = setTimeout(() => save({ [k]: $(k).value }, true), 500); };

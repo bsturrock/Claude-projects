@@ -44,9 +44,13 @@ def is_filler(w: Word) -> bool:
 
 
 def build_pieces(parts: list[tuple[float, float]], words: list[Word], fps: float,
-                 tighten: bool) -> list[Piece]:
+                 tighten: bool, transition_after: int = -1, transition: float = 0.0) -> list[Piece]:
+    """`transition_after`: insert a transition placeholder (part -1) of `transition`
+    seconds after that part (used after a cold open's payoff)."""
     pieces: list[Piece] = []
     for pi, (a, b) in enumerate(parts):
+        if pi == transition_after + 1 and transition > 0 and pi > 0:
+            pieces.append(Piece(0.0, transition, -1))
         if not tighten:
             pieces.append(Piece(a, b, pi))
             continue
@@ -102,11 +106,13 @@ def map_words(pieces: list[Piece], words: list[Word], drop_fillers: bool) -> lis
     """Source-time words -> output-time words (words cut out are dropped)."""
     out: list[Word] = []
     for p in pieces:
+        if p.part < 0:
+            continue
         for w in words:
             if drop_fillers and is_filler(w):
                 continue
             mid = (w.start + w.end) / 2
-            if p.src_start <= mid < p.src_end:
+            if p.part >= 0 and p.src_start <= mid < p.src_end:
                 s = p.out_start + max(0.0, w.start - p.src_start)
                 e = p.out_start + min(p.dur, w.end - p.src_start)
                 out.append(Word(w.text, round(s, 3), round(max(e, s + 0.05), 3)))

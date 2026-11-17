@@ -8,7 +8,8 @@ source video / URL / watch folder
   -> measure audio cues (loud, fast, long pauses)
   -> Claude finds moments that fit the project prompt, learning from clips you rated top/flop:
      single clips, cold opens (payoff first) and stitched clips, plus key words and alt hooks
-  -> snap to sentence boundaries; clips always end on a full sentence (15-90s by default)
+  -> editing pass (Claude): each clip re-cut as one complete thought, starting where the idea
+     starts and ending right after the payoff, tangents cut; sentence snapping as fallback
   -> review in Clip Studio: trim parts, restyle, approve, rate, make variants
   -> reframe to 1080x1920 (active speaker detection, speaker cuts, crosstalk split screen,
      looser framing when faces are big, static borders cropped)
@@ -40,6 +41,7 @@ clipper studio            # opens http://127.0.0.1:8765, workspace in ~/ClipStud
 - **Projects:** one per show, topic or creator, tied to a **channel** (Yap or Framebite). The channel sets the end card, the signature caption style and sensible defaults. Each project has its own prompt, tone, clip count and length, a list of names and terms to spell correctly, notes for the post copy, and toggles for pause trimming, voice cleanup, swear masking and economy mode (Claude Batch API, half price, slower).
 - **Adding sources:** drop videos onto a project (they're copied into the workspace), paste a file path to use a file in place without copying, paste a YouTube URL, or set a **watch folder** so new recordings are picked up automatically. Each source is transcribed, clipped and rendered in the background. "Find again" asks Claude for a fresh set and keeps clips you approved, rated or posted.
 - **Clip grid:** filter by To review, Approved, Posted or Top performers. Approve or reject right on the cards, or approve/reject everything shown and render all approved clips in one go.
+- **Auto-edit** on a clip page asks Claude to re-cut that clip as one complete thought (useful for clips you add by hand).
 - **Clip page:** edit the clip's **parts** (one span, or several for a cold open or stitched clip), hook, title and caption style. Re-render, download, and copy the post text for each platform. **Make variant** copies the clip with an alternative hook and a different style for A/B testing.
 - **How did it do?** Mark clips as **Top performer** or **Flopped**. The next time Claude picks clips for that project, it sees those clips as examples of what works and what doesn't for that audience.
 - **Posted to:** tick off where a clip has gone out, optionally with the link.
@@ -90,6 +92,8 @@ Brand kits live in `clipper/brands/<id>/` (`logo.png` + `brand.json`). Each clip
 
 - **Yap** (podcasts, streams, debates): "yap" pops in, then the speech bubble drops from the top, lands on the text with a thump and bounces to rest.
 - **Framebite** (TV, film, established media): the rounded rectangle pops in, then one big bite takes the corner out, with a munch, a jolt and crumbs.
+
+Cold opens get a quick (0.6 s) branded rewind wipe between the payoff and the start of the thought, with a tape-rewind sound. Hook headlines are branded too: Yap gets yellow type on a black bubble, Framebite a cream serif title between teal rules, and everything else a dark pill.
 
 Signature caption styles, drawn frame by frame:
 
@@ -150,6 +154,7 @@ Each clip is analysed at 25 fps:
 | `--economy` | off | Claude Batch API: half price, can take longer. |
 | `--encoder` / `--parallel` | auto / 2 | Mac hardware encoder when available; clips rendered at once. |
 | `-r/--review` | off | Browser review before rendering. |
+| `--no-edit` / `--edit` | | Skip Claude's editing pass / also run it on `--clips` input. |
 | `--hook-overlay` | intro | Hook headline for the first ~3.5s, the whole clip (`full`), or `off`. |
 | `--whisper-model` | small | `large-v3-turbo` is more accurate if you have the time and RAM. |
 | `--transcript` | | Existing word-timestamped JSON (this tool's format, or Whisper/WhisperX). |

@@ -14,7 +14,7 @@ FONTS_DIR = Path(__file__).parent / "fonts"
 @dataclass
 class CaptionStyle:
     font: str = "Poppins Black"
-    size: int = 156
+    size: int = 128
     color: str = "#FFFFFF"
     highlight: str = "#FFE500"
     palette: tuple = ()          # if set, highlight colour rotates per caption chunk
@@ -23,8 +23,8 @@ class CaptionStyle:
     shadow: float = 4
     blur: float = 0              # soft edge on outline/shadow
     uppercase: bool = True
-    max_words: int = 3
-    max_chars: int = 15
+    max_words: int = 5
+    max_chars: int = 24
     pop: bool = True             # chunk scales in when it appears
     bounce: bool = False         # overshoot on the pop
     active_scale: int = 100      # % size of the word being spoken
@@ -47,21 +47,21 @@ PRESETS: dict[str, CaptionStyle] = {
                     "podcasts, motivation, most viral talking-head content.",
     ),
     "playful": CaptionStyle(
-        font="Lilita One", size=114, emph_color="#FFFFFF", emph_scale=118, palette=("#FFE500", "#3DF5FF", "#FF5FD8", "#8CFF4F"),
-        outline=9, shadow=5, max_words=3, max_chars=15, bounce=True, word_gap=2, active_scale=114, tilt=4,
+        font="Lilita One", size=100, emph_color="#FFFFFF", emph_scale=118, palette=("#FFE500", "#3DF5FF", "#FF5FD8", "#8CFF4F"),
+        outline=9, shadow=5, max_words=5, max_chars=24, bounce=True, word_gap=2, active_scale=114, tilt=4,
         description="Chunky rounded type, colour-cycling active word, bounce and tilt. Gaming, "
                     "streams, comedy, reactions, entertainment, lighthearted chaos.",
     ),
     "editorial": CaptionStyle(
-        font="DM Serif Display", size=130, highlight="#F5C451", outline=4, shadow=3, blur=2,
-        emph_color="#F5C451", emph_scale=100, uppercase=False, max_words=4, max_chars=24, pop=False,
+        font="DM Serif Display", size=112, highlight="#F5C451", outline=4, shadow=3, blur=2,
+        emph_color="#F5C451", emph_scale=100, uppercase=False, max_words=7, max_chars=36, pop=False,
         fade_ms=90, y=0.72,
         description="Elegant serif, sentence case, gold active word, soft shadow and fade. News, politics, "
                     "business, finance, history, documentary, serious or emotional moments.",
     ),
     "clean": CaptionStyle(
-        font="Poppins ExtraBold", size=138, highlight="#3DFF8B", emph_color="#FFE500", outline=8, shadow=3, word_gap=2,
-        uppercase=False, max_words=4, max_chars=24,
+        font="Poppins ExtraBold", size=112, highlight="#3DFF8B", emph_color="#FFE500", outline=8, shadow=3, word_gap=2,
+        uppercase=False, max_words=6, max_chars=32,
         description="Modern sans, sentence case, green active word. Education, how-to, tech, "
                     "science, interviews, calm explainers.",
     ),

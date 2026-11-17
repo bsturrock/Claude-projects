@@ -64,6 +64,8 @@ class Options:
     encoder: str = "auto"         # auto | videotoolbox | x264
     parallel: int = 2             # clips rendered at once
     framing: str = "auto"         # auto | tight | medium | wide
+    edit_pass: bool = True        # Claude re-cuts each clip as one complete thought
+    edit_manual: bool = False     # also run the edit pass on --clips input
     examples: list = field(default_factory=list)  # rated past clips fed to selection
 
 
@@ -180,13 +182,15 @@ class Project:
         if o.clips_path:
             clips = [c for c in load_manual(o.clips_path) if c.end > c.start]
             log(f"loaded {len(clips)} clips from {o.clips_path}")
+            if o.edit_manual:
+                clips = self.edit(clips, force=True)
         elif o.review and self.state_path.exists() and not o.reselect:
             clips = [clip_from_dict(d) for d in json.loads(self.state_path.read_text())]
             log(f"resuming {len(clips)} clips from {self.state_path} (use --reselect to start over)")
         else:
             self.note("finding clips with Claude")
             cands = self.find_candidates()
-            clips = dedupe(cands)[: o.count]
+            clips = self.edit(dedupe(cands)[: o.count])
         if o.style != "auto":
             for c in clips:
                 c.style = o.style
@@ -212,6 +216,20 @@ class Project:
             examples=o.examples, batch=o.economy,
         )
         return [r for c in cands if (r := refine(c, self.transcript, o.min_len, o.max_len))]
+
+    def edit(self, clips: list[Clip], force: bool = False) -> list[Clip]:
+        """Editorial pass (complete thoughts, tight cuts). Falls back to the current cut on failure."""
+        o = self.opts
+        if not clips or not (o.edit_pass or force):
+            return clips
+        from .editor import edit_clips
+        self.note(f"editing {len(clips)} clip(s) into complete thoughts")
+        try:
+            return edit_clips(clips, self.transcript, brief=o.brief, tone=o.tone, min_len=o.min_len,
+                              max_len=o.max_len, model=o.model, batch=o.economy)
+        except Exception as e:
+            log(f"edit pass failed, keeping the rough cuts: {e}")
+            return clips
 
     def save(self) -> None:
         with self.lock:
@@ -271,7 +289,10 @@ class Project:
         log(f"  layout: {c.layout}")
         fps = min(round(self.info.fps), 60) or 30
         src_words = [w for a, b in parts for w in self.transcript.words_between(a, b)]
-        pieces = build_pieces(parts, src_words, fps, tighten=o.tighten)
+        from .endcard import TRANSITION_SECONDS
+        cold = c.kind == "cold_open" and len(parts) > 1
+        pieces = build_pieces(parts, src_words, fps, tighten=o.tighten,
+                              transition_after=0 if cold else -1, transition=TRANSITION_SECONDS if cold else 0.0)
         content = total_duration(pieces)
         if o.tighten:
             log(f"  tightened {c.duration:.1f}s -> {content:.1f}s in {len(pieces)} pieces")
@@ -280,8 +301,9 @@ class Project:
         style = get_style(c.style or DEFAULT_STYLE, **o.style_overrides)
         cap_y = 0.5 if all(p.dominant_layout == "stack" for p in plans) else style.y
         ass_path = self.work / f"{c.slug}.ass"
-        # signature styles are drawn per frame by captions_fx; the ASS file then only carries the hook
-        ass_path.write_text(build_ass([] if c.style in FX_STYLES else words, style, hook=c.hook, hook_mode=o.hook_mode,
+        # signature styles and the hook are drawn per frame by captions_fx; the ASS file only
+        # carries libass captions for the generic styles
+        ass_path.write_text(build_ass([] if c.style in FX_STYLES else words, style, hook="", hook_mode=o.hook_mode,
                                       duration=content, y=cap_y, emphasis=c.emphasis,
                                       mask_profanity=o.mask_profanity))
         (self.out / f"{c.slug}.srt").write_text(build_srt(words, style, o.mask_profanity))
@@ -292,12 +314,20 @@ class Project:
             for ext in (".mp4", ".jpg", ".srt", ".post.json"):
                 (self.out / (Path(c.file).stem + ext)).unlink(missing_ok=True)
         mp4 = self.out / f"{c.slug}.mp4"
-        overlay = None
+        from .captions_fx import FxCaptions, HookFx
+        fx = None
         if c.style in FX_STYLES:
-            from .captions_fx import FxCaptions
             fx = FxCaptions(c.style, words, c.emphasis, o.mask_profanity, duration=content,
                             y=0.5 if cap_y == 0.5 else None)
-            overlay = fx.draw
+        hook_brand = o.brand or (c.style if c.style in FX_STYLES else "")
+        hook = HookFx(hook_brand, c.hook, o.hook_mode, duration=content)
+
+        def overlay(frame, t, transition=False):
+            if transition:
+                return  # the rewind wipe stands on its own
+            if fx is not None:
+                fx.draw(frame, t)
+            hook.draw(frame, t)
         total = render_clip(self.info, parts, pieces, plans, ass_path, mp4, crf=o.crf, preset=o.preset,
                             loudnorm=o.loudnorm, audio_clean=o.audio_clean, brand=o.brand,
                             encoder=o.encoder, progress=progress, overlay=overlay)

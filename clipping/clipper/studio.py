@@ -403,6 +403,7 @@ class Workspace:
         new = dedupe(pl.find_candidates())
         keep = [c for c in pl.clips if c.status == "approved" or c.posts or c.rating] if keep_existing else []
         new = [c for c in new if all(overlap(c, k) < 0.25 for k in keep)][: o.count]
+        new = pl.edit(new)
         if o.style != "auto":
             for c in new:
                 c.style = o.style
@@ -429,6 +430,22 @@ class Workspace:
                 self.clip_jobs[(pid, sid, i)] = {"state": "error", "error": str(e), "msg": "", "kind": kind}
             return
         clips = [c for c in pl.clips if c.index in idxs]
+        if kind == "edit":
+            for c in clips:
+                self.clip_jobs[(pid, sid, c.index)].update(state="running", msg="editing with Claude")
+            from .editor import edit_clips
+            o = pl.opts
+            try:
+                kept = edit_clips(clips, pl.transcript, brief=o.brief, tone=o.tone, min_len=o.min_len,
+                                  max_len=o.max_len, model=o.model, batch=o.economy)
+                for c in clips:
+                    note = "" if c in kept else "Claude couldn't make this a complete thought; cut left as is"
+                    self.clip_jobs[(pid, sid, c.index)].update(state="done", msg="", error=note)
+            except Exception as e:
+                for c in clips:
+                    self.clip_jobs[(pid, sid, c.index)].update(state="error", msg="", error=f"edit failed: {e}")
+            pl.save()
+            return
         try:
             for c in clips:
                 self.clip_jobs[(pid, sid, c.index)].update(state="running", msg="writing post copy")
@@ -606,6 +623,11 @@ class Workspace:
                                  style=p.style if p.style in PRESETS else "bold"))
         pl.save()
         return idx
+
+    def auto_edit(self, pid: str, sid: str, idx: int) -> None:
+        """Queue Claude's editing pass for one clip (e.g. one added by hand)."""
+        self.clip_jobs[(pid, sid, idx)] = {"state": "queued", "kind": "edit", "msg": "", "error": ""}
+        self.q.put(("edit", pid, sid, [idx]))
 
     def make_variant(self, pid: str, sid: str, idx: int) -> int:
         """Copy a clip with its next alternative hook and a different caption style."""
@@ -853,6 +875,9 @@ def _make_handler(ws: Workspace):
                         ws.enqueue_clips("render", pid, sid, [int(i) for i in body.get("indices", [])])
                     elif action == "copy":
                         ws.enqueue_clips("copy", pid, sid, [int(i) for i in body.get("indices", [])])
+                    elif action == "autoedit":
+                        for i in body.get("indices", []):
+                            ws.auto_edit(pid, sid, int(i))
                     elif action == "newclip":
                         self._json({"index": ws.new_clip(pid, sid, float(body["start"]), float(body["end"]))})
                         return

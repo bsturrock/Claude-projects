@@ -31,6 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--target", dest="target_len", type=float, help="Preferred clip length in seconds")
     g.add_argument("--clips", dest="clips_path", type=Path,
                    help="Skip AI selection: JSON list of {start, end, title, hook}")
+    g.add_argument("--no-edit", action="store_true",
+                   help="Skip Claude's editing pass (complete thoughts, tight cuts) after selection")
+    g.add_argument("--edit", action="store_true",
+                   help="Run the editing pass on --clips input too (it normally trusts your timings)")
     g.add_argument("--select-only", action="store_true",
                    help="Stop after selection and write clips.json")
     g.add_argument("-r", "--review", action="store_true",
@@ -134,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         tighten=a.tighten, audio_clean=a.clean_audio, brand=a.brand, mask_profanity=a.mask_profanity,
         vocabulary=[v.strip() for v in a.vocab.split(",") if v.strip()], economy=a.economy,
         encoder=a.encoder, parallel=a.parallel, framing=a.framing,
+        edit_pass=not a.no_edit, edit_manual=a.edit,
     )
     try:
         run(opts)
