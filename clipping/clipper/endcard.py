@@ -453,6 +453,7 @@ def write_sting(kind: str, path: Path, seconds: float = CARD_SECONDS) -> Path:
 # ---------------------------------------------------------------------------
 
 TRANSITION_SECONDS = 0.6
+TRANSITIONS = {"swipe": 0.45, "panel": 0.6, "none": 0.0}  # cold-open transition styles and lengths
 _TRANS = {
     "yap": {"bg": (9, 252, 249), "fg": (17, 17, 17), "font": "LilitaOne-Regular.ttf", "text": "rewind", "size": 170},
     "framebite": {"bg": (155, 160, 6), "fg": (232, 242, 250), "font": "DMSerifDisplay-Regular.ttf", "text": "Earlier",
@@ -487,10 +488,33 @@ def _trans_label(bid: str) -> np.ndarray:
     return arr[..., [2, 1, 0, 3]]  # RGBA -> BGRA
 
 
+def swipe_frames(last: np.ndarray, nxt: np.ndarray, fps: float, seconds: float = TRANSITIONS["swipe"]):
+    """Whip pan using the real frames: the payoff frame flies out to the left and the
+    first frame of the setup follows it in from the right, motion-blurred at speed."""
+    H, W = last.shape[:2]
+    n = max(2, round(seconds * fps))
+    strip = np.concatenate([last, nxt], axis=1)  # [payoff | setup], 2W wide
+    prev_x = 0.0
+    for i in range(n):
+        u = i / (n - 1)
+        e = u * u * (3 - 2 * u)  # smoothstep: accelerate, then settle
+        x = e * W
+        speed = abs(x - prev_x)
+        prev_x = x
+        k = int(min(121, 1 + speed * 0.6)) | 1  # blur length follows the pan speed
+        view = strip[:, int(x):int(x) + W]
+        if view.shape[1] < W:
+            view = strip[:, -W:]
+        yield cv2.blur(view, (k, 1)) if k > 1 else view.copy()
+
+
 def transition_frames(bid: str, last: np.ndarray, nxt: np.ndarray, fps: float,
-                      seconds: float = TRANSITION_SECONDS):
-    """Panel sweeps in right-to-left over a rewinding (streaking) last frame, shows
-    the rewind label, then sweeps out to the left revealing the next frame."""
+                      seconds: float = TRANSITION_SECONDS, style: str = "panel"):
+    """Cold-open transition. style "swipe" pans between the real frames; "panel" sweeps a
+    branded panel with a rewind label across, then reveals the next frame."""
+    if style == "swipe":
+        yield from swipe_frames(last, nxt, fps, seconds)
+        return
     spec = _TRANS.get(bid, _TRANS_DEFAULT)
     H, W = last.shape[:2]
     label = _trans_label(bid)

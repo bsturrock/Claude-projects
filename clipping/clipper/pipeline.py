@@ -65,6 +65,7 @@ class Options:
     parallel: int = 2             # clips rendered at once
     framing: str = "auto"         # auto | tight | medium | wide
     edit_pass: bool = True        # Claude re-cuts each clip as one complete thought
+    transition: str = "swipe"     # cold-open transition: swipe | panel | none
     edit_manual: bool = False     # also run the edit pass on --clips input
     examples: list = field(default_factory=list)  # rated past clips fed to selection
 
@@ -267,8 +268,12 @@ class Project:
         o = self.opts
         key = (f"{c.parts()}|{c.style}|{c.hook}|{c.emphasis}|{o.hook_mode}|{o.layout}|{o.two_shot}|"
                f"{o.crosstalk}|{o.use_asd}|{sorted(o.style_overrides.items())}|{o.crf}|{o.tighten}|"
-               f"{o.audio_clean}|{o.brand}|{o.mask_profanity}|{o.framing}")
+               f"{o.audio_clean}|{o.brand}|{o.mask_profanity}|{o.framing}|{self.transition_for(c)}")
         return hashlib.sha1(key.encode()).hexdigest()[:10]
+
+    def transition_for(self, c: Clip) -> str:
+        t = c.transition or self.opts.transition
+        return t if t in ("swipe", "panel", "none") else "swipe"
 
     def plan_for(self, a: float, b: float) -> Plan:
         o = self.opts
@@ -289,10 +294,11 @@ class Project:
         log(f"  layout: {c.layout}")
         fps = min(round(self.info.fps), 60) or 30
         src_words = [w for a, b in parts for w in self.transcript.words_between(a, b)]
-        from .endcard import TRANSITION_SECONDS
-        cold = c.kind == "cold_open" and len(parts) > 1
+        from .endcard import TRANSITIONS
+        trans_style = self.transition_for(c)
+        tlen = TRANSITIONS.get(trans_style, 0.0) if c.kind == "cold_open" and len(parts) > 1 else 0.0
         pieces = build_pieces(parts, src_words, fps, tighten=o.tighten,
-                              transition_after=0 if cold else -1, transition=TRANSITION_SECONDS if cold else 0.0)
+                              transition_after=0 if tlen else -1, transition=tlen)
         content = total_duration(pieces)
         if o.tighten:
             log(f"  tightened {c.duration:.1f}s -> {content:.1f}s in {len(pieces)} pieces")
@@ -330,7 +336,7 @@ class Project:
             hook.draw(frame, t)
         total = render_clip(self.info, parts, pieces, plans, ass_path, mp4, crf=o.crf, preset=o.preset,
                             loudnorm=o.loudnorm, audio_clean=o.audio_clean, brand=o.brand,
-                            encoder=o.encoder, progress=progress, overlay=overlay)
+                            encoder=o.encoder, progress=progress, overlay=overlay, transition=trans_style)
         thumbnail(mp4, min(1.0, content / 3), self.out / f"{c.slug}.jpg")
         with self.lock:
             c.file = mp4.name

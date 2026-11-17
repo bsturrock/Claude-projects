@@ -187,7 +187,7 @@ async function homeView() {
       </a>`).join("") || `<div class="muted">No projects yet. Create one per show, topic or creator.</div>`}
     </div><p class="hint">Workspace: ${esc(d.workspace)}</p>`;
   $("newp").onclick = () => {
-    $("newform").innerHTML = `<div class="panel settings" style="margin-bottom:14px">${settingsForm({ name: "", brief: "", tone: "", style: "auto", count: 5, min_len: 15, max_len: 90, hook_mode: "intro", copy_notes: "", auto_render: true, two_shot: "cut", crosstalk: true, whisper_model: "small", channel: "", end_card: true, vocabulary: "", tighten: false, audio_clean: false, mask_profanity: false, economy: false, watch_folder: "", framing: "auto" })}
+    $("newform").innerHTML = `<div class="panel settings" style="margin-bottom:14px">${settingsForm({ name: "", brief: "", tone: "", style: "auto", count: 5, min_len: 15, max_len: 90, hook_mode: "intro", copy_notes: "", auto_render: true, two_shot: "cut", crosstalk: true, whisper_model: "small", channel: "", end_card: true, vocabulary: "", tighten: false, audio_clean: false, mask_profanity: false, economy: false, watch_folder: "", framing: "auto", transition: "swipe" })}
       <div class="row sec"><button class="primary" id="create">Create project</button><button class="ghost" id="cancel">Cancel</button></div></div>`;
     $("cancel").onclick = () => ($("newform").innerHTML = "");
     $("s_channel").onchange = () => { const ch = CHANNELS[$("s_channel").value]; if (!ch) return;
@@ -212,7 +212,8 @@ function settingsForm(p) {
     <label>Names and terms to spell right (comma separated)</label><input id="s_vocab" value="${esc(p.vocabulary || "")}" placeholder="e.g. Yaron Brook, Sam Seder, Ayn Rand">
     <div class="two"><div><label>Hook headline</label><select id="s_hook">${opt("intro", p.hook_mode, "first 3.5s")}${opt("full", p.hook_mode, "whole clip")}${opt("off", p.hook_mode, "off")}</select></div>
     <div><label>Two people far apart</label><select id="s_two">${opt("cut", p.two_shot, "cut to speaker")}${opt("stack", p.two_shot, "split screen")}</select></div></div>
-    <label>Framing</label><select id="s_framing">${opt("auto", p.framing || "auto", "auto (loosens when faces are big)")}${opt("tight", p.framing, "tight (full-height crop)")}${opt("medium", p.framing, "medium (4:5 window)")}${opt("wide", p.framing, "wide (square window)")}</select>
+    <div class="two"><div><label>Cold-open transition</label><select id="s_trans">${opt("swipe", p.transition || "swipe", "swipe (pans the real frames)")}${opt("panel", p.transition, "rewind panel (branded)")}${opt("none", p.transition, "none (straight cut)")}</select></div><div>
+    <label>Framing</label><select id="s_framing">${opt("auto", p.framing || "auto", "auto (loosens when faces are big)")}${opt("tight", p.framing, "tight (full-height crop)")}${opt("medium", p.framing, "medium (4:5 window)")}${opt("wide", p.framing, "wide (square window)")}</select></div></div>
     <div class="row" style="margin-top:12px;gap:8px 16px">
       ${chk("s_endcard", p.end_card, "Channel end card")}
       ${chk("s_tighten", p.tighten, "Trim long pauses", "Shortens pauses longer than 0.8 s (and um/uh) to about 0.4 s")}
@@ -231,7 +232,7 @@ function readSettings() {
     crosstalk: $("s_cross").checked, whisper_model: $("s_whisper").value, channel: $("s_channel").value,
     vocabulary: $("s_vocab").value, end_card: $("s_endcard").checked, tighten: $("s_tighten").checked,
     audio_clean: $("s_clean").checked, mask_profanity: $("s_mask").checked, economy: $("s_economy").checked,
-    watch_folder: $("s_watch").value.trim(), framing: $("s_framing").value };
+    watch_folder: $("s_watch").value.trim(), framing: $("s_framing").value, transition: $("s_trans").value };
 }
 
 // ---------------------------------------------------------------- project
@@ -384,6 +385,8 @@ async function clipView(pid, sid, idx) {
       <div class="sec"><div class="row" style="margin-bottom:6px"><h2 style="margin:0">Parts</h2><span class="muted" id="kind"></span><span class="spacer"></span>
         <button id="addpart" title="Add a part starting at the playhead">+ Part at playhead</button></div>
         <div class="parts" id="parts"></div>
+        <div class="row" id="transrow" style="margin-top:8px" hidden><span class="muted">Transition after the payoff</span>
+          <select id="trans" style="width:auto"><option value="">project default</option><option value="swipe">swipe</option><option value="panel">rewind panel</option><option value="none">none</option></select></div>
         <div class="hint">Parts play in this order. Use two or more for a cold open (payoff first) or to stitch moments together. Keys: i / o set the selected part's start / end at the playhead.</div></div>
       <div class="sec"><h2>Transcript</h2><div class="words" id="words"></div>
         <div class="hint">Click a word to jump. Alt/Option-click: start the selected part here. Shift-click: end it after this word.</div></div>
@@ -413,6 +416,7 @@ async function clipView(pid, sid, idx) {
   $("playclip").onclick = () => playParts(0);
   $("playfrom").onclick = () => playParts(3);
   $("addpart").onclick = () => { const t = P.currentTime || 0; CV.part = CV.c.parts.length; saveParts([...CV.c.parts, [t, Math.min(CV.src.duration, t + 8)]]); };
+  $("trans").onchange = () => save({ transition: $("trans").value });
   $("top").onclick = () => save({ rating: CV.c.rating === "top" ? "" : "top" });
   $("flop").onclick = () => save({ rating: CV.c.rating === "flop" ? "" : "flop" });
   $("autoedit").onclick = async () => { await api(base() + "/autoedit", { indices: [idx] }); toast("Claude is editing this clip..."); };
@@ -475,6 +479,8 @@ async function loadClip(full) {
   if (CV.part >= c.parts.length) CV.part = 0;
   drawParts(full);
   $("kind").textContent = c.parts.length > 1 ? (c.kind === "cold_open" ? "cold open" : "stitched") : "";
+  $("transrow").hidden = !(c.kind === "cold_open" && c.parts.length > 1);
+  if (document.activeElement !== $("trans")) $("trans").value = c.transition || "";
   $("top").classList.toggle("on", c.rating === "top"); $("flop").classList.toggle("on", c.rating === "flop");
   const dd = c.duration, bad = dd < CV.limits.min || dd > CV.limits.max;
   $("dur").textContent = `${dd.toFixed(1)}s${bad ? ` (target ${CV.limits.min}-${CV.limits.max}s)` : ""}`; $("dur").className = "dur" + (bad ? " bad" : "");

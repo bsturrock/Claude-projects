@@ -61,7 +61,8 @@ def _punch(frame: np.ndarray, zoom: float) -> np.ndarray:
 def render_clip(info: VideoInfo, parts: list[tuple[float, float]], pieces: list[Piece],
                 plans: list[Plan], ass_path: Path, out_path: Path, *, crf: int = 19,
                 preset: str = "medium", loudnorm: bool = True, audio_clean: bool = False,
-                brand: str = "", encoder: str = "auto", progress=None, overlay=None) -> float:
+                brand: str = "", encoder: str = "auto", progress=None, overlay=None,
+                transition: str = "swipe") -> float:
     """`overlay(frame, t)` draws on each output frame (signature captions)."""
     """Returns the output duration in seconds."""
     fps = min(round(info.fps), 60) or 30
@@ -150,7 +151,7 @@ def render_clip(info: VideoInfo, parts: list[tuple[float, float]], pieces: list[
                     t0 = nxt_p.src_start - parts[nxt_p.part][0]
                     nxt = _punch(reframers[nxt_p.part].render(first, t0), nxt_p.zoom)
                     want = round(p.dur * fps)
-                    for k, fr in enumerate(endcard.transition_frames(brand, last, nxt, fps, p.dur)):
+                    for k, fr in enumerate(endcard.transition_frames(brand, last, nxt, fps, p.dur, style=transition)):
                         if k >= want:
                             break
                         if overlay is not None:

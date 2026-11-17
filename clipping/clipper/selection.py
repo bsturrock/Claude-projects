@@ -41,6 +41,7 @@ class Clip:
     rating: str = ""          # "" | top | flop  (feeds back into selection)
     rated_text: str = ""      # transcript snapshot taken when rated
     out_duration: float = 0.0  # rendered length after tightening + end card
+    transition: str = ""       # cold opens: "" (project default) | swipe | panel | none
 
     def parts(self) -> list[tuple[float, float]]:
         if self.segments and len(self.segments) > 1:

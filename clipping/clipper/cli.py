@@ -64,6 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Don't switch to split screen when people talk over each other")
     g.add_argument("--no-asd", action="store_true",
                    help="Disable active speaker detection (follow the largest face)")
+    g.add_argument("--transition", choices=["swipe", "panel", "none"], default="swipe",
+                   help="Cold-open transition: whip pan on the real frames, branded rewind panel, or a plain cut")
     g.add_argument("--framing", choices=["auto", "tight", "medium", "wide"], default="auto",
                    help="How close to crop on the speaker; auto loosens it when faces are big")
     g.add_argument("--tighten", action="store_true",
@@ -138,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         tighten=a.tighten, audio_clean=a.clean_audio, brand=a.brand, mask_profanity=a.mask_profanity,
         vocabulary=[v.strip() for v in a.vocab.split(",") if v.strip()], economy=a.economy,
         encoder=a.encoder, parallel=a.parallel, framing=a.framing,
-        edit_pass=not a.no_edit, edit_manual=a.edit,
+        edit_pass=not a.no_edit, edit_manual=a.edit, transition=a.transition,
     )
     try:
         run(opts)

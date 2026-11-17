@@ -79,6 +79,7 @@ class ProjectSettings:
     economy: bool = False
     watch_folder: str = ""
     framing: str = "auto"
+    transition: str = "swipe"     # cold-open transition: swipe | panel | none
     created: float = field(default_factory=_now)
 
     @classmethod
@@ -281,6 +282,7 @@ class Workspace:
             audio_clean=p.audio_clean, mask_profanity=p.mask_profanity, economy=p.economy,
             brand=p.channel if p.end_card else "", examples=self.examples(pid), parallel=self.parallel,
             framing=p.framing if p.framing in ("auto", "tight", "medium", "wide") else "auto",
+            transition=p.transition if p.transition in ("swipe", "panel", "none") else "swipe",
         )
 
     def examples(self, pid: str) -> list[dict]:
@@ -588,6 +590,8 @@ class Workspace:
                     setattr(c, k, str(body[k])[:200])
             if body.get("style") in PRESETS:
                 c.style = body["style"]
+            if body.get("transition") in ("", "swipe", "panel", "none"):
+                c.transition = body["transition"]
             if body.get("status") in ("pending", "approved", "rejected"):
                 c.status = body["status"]
             if isinstance(body.get("copy"), dict):
